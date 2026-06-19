@@ -4,7 +4,8 @@ import yfinance as yf
 import time
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
+
 
 # 기본 TOP 15 리스트
 DIVIDEND_STOCKS = [
