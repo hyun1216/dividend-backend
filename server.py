@@ -1,12 +1,22 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-import yfinance as yf
+import urllib.request
+import json
 import time
+import ssl
+
+# 💡 Python 3.4 SSL 인증서 오류 무시 세팅 (매우 중요!)
+try:
+    _create_unverified_https_context = ssl._create_unverified_context
+except AttributeError:
+    pass
+else:
+    ssl._create_default_https_context = _create_unverified_https_context
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
-# 기본 TOP 15 리스트
+# 기본 TOP 15 리스트 (그대로 유지!)
 DIVIDEND_STOCKS = [
     { "category": "kr-stock", "ticker": "005935.KS", "isUS": False, "period": "분기배당", "months": "3, 6, 9, 12월", "name": "삼성전자우 (005935)", "rate": 0.92, "desc": "국민 주식 삼성전자의 배당 우선 우선주, 국내 대표 분기 배당주" },
     { "category": "kr-stock", "ticker": "055550.KS", "isUS": False, "period": "분기배당", "months": "2, 4, 7, 11월", "name": "신한지주 (055550)", "rate": 2.78, "desc": "국내 금융지주사 중 최초로 분기 배당을 정착시킨 대표적인 고배당 은행주" },
@@ -30,6 +40,22 @@ DIVIDEND_STOCKS = [
 cache = {}
 CACHE_TTL = 18000  # 5시간
 
+# 💡 yfinance 대신 야후 파이낸스 직통 API 호출 함수 (사람인 척 User-Agent 추가!)
+def fetch_stock_data(ticker):
+    url = "https://query1.finance.yahoo.com/v7/finance/quote?symbols=" + ticker
+    # 크롬 브라우저인 것처럼 속이는 헤더
+    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            result = data.get('quoteResponse', {}).get('result', [])
+            if result:
+                return result[0]
+    except Exception as e:
+        print("데이터 가져오기 실패 [{0}]: {1}".format(ticker, e))
+    return None
+
+
 # 1. 메인화면용 전체 리스트 가져오기
 @app.route('/api/stocks')
 def get_all_stocks():
@@ -41,13 +67,12 @@ def get_all_stocks():
         if ticker in cache and (current_time - cache[ticker][0] < CACHE_TTL):
             price = cache[ticker][1].get("price", 0)
         else:
-            try:
-                ticker_obj = yf.Ticker(ticker)
-                hist = ticker_obj.history(period="1d")
-                price = float(hist['Close'].iloc[-1])
+            stock_info = fetch_stock_data(ticker)
+            if stock_info:
+                price = stock_info.get('regularMarketPrice', 0)
                 cache[ticker] = (current_time, {"price": price})
-            except:
-                price = 0
+            else:
+                price = 0 # 실패 시 0
         
         enriched_stock = stock.copy()
         enriched_stock["price"] = price
@@ -55,7 +80,7 @@ def get_all_stocks():
         
     return jsonify(response_data)
 
-# 2. [신규 추가] 완전히 새로운 종목 실시간 검색 및 배당 데이터 추출하기
+# 2. 신규 추가 종목 실시간 검색
 @app.route('/api/stock')
 def get_single_stock():
     symbol = request.args.get('symbol', '').upper().strip()
@@ -68,39 +93,27 @@ def get_single_stock():
     if symbol in cache and (current_time - cache[symbol][0] < CACHE_TTL) and "rate" in cache[symbol][1]:
         return jsonify(cache[symbol][1])
         
-    try:
-        ticker_obj = yf.Ticker(symbol)
-        hist = ticker_obj.history(period="1d")
-        price = float(hist['Close'].iloc[-1])
+    stock_info = fetch_stock_data(symbol)
+    if not stock_info:
+        return jsonify({"error": "종목을 찾을 수 없거나 데이터를 가져오는데 실패했습니다."}), 500
         
-        # 야후 파이낸스에서 배당 정보 추출
-        info = ticker_obj.info
-        rate = info.get('dividendYield', 0)
-        if not rate:
-            rate = info.get('trailingAnnualDividendYield', 0)
-        
-        rate_percent = round(rate * 100, 2) if rate else 0.0
-        
-        # 이름 및 설명 가져오기
-        short_name = info.get('shortName', symbol)
-        summary = info.get('longBusinessSummary', '실시간으로 추가된 검색 종목입니다.')
-        if len(summary) > 50:
-            summary = summary[:50] + "..."
-            
-        stock_data = {
-            "ticker": symbol,
-            "price": price,
-            "rate": rate_percent,
-            "name": "{0} ({1})".format(short_name, symbol),
-            "desc": summary,
-            "period": "월배당" if rate_percent > 7.0 else "분기배당",
-            "months": "매달" if rate_percent > 7.0 else "3, 6, 9, 12월"
-        }
-        
-        cache[symbol] = (current_time, stock_data)
-        return jsonify(stock_data)
-    except Exception as e:
-        return jsonify({"error": "종목을 찾을 수 없거나 실패했습니다: {0}".format(str(e))}), 500
+    price = stock_info.get('regularMarketPrice', 0)
+    rate = stock_info.get('trailingAnnualDividendYield', 0)
+    rate_percent = round(rate * 100, 2) if rate else 0.0
+    short_name = stock_info.get('shortName', symbol)
+    
+    stock_data = {
+        "ticker": symbol,
+        "price": price,
+        "rate": rate_percent,
+        "name": "{0} ({1})".format(short_name, symbol),
+        "desc": "실시간 검색으로 추가된 종목입니다.",
+        "period": "월배당" if rate_percent > 7.0 else "분기배당",
+        "months": "매달" if rate_percent > 7.0 else "3, 6, 9, 12월"
+    }
+    
+    cache[symbol] = (current_time, stock_data)
+    return jsonify(stock_data)
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    app.run(debug=True, port=5000, host='0.0.0.0')
