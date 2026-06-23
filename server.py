@@ -1,22 +1,12 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-import urllib.request
-import json
+import yfinance as yf
+import datetime
 import time
-import ssl
-
-# 💡 Python 3.4 SSL 인증서 오류 무시 세팅 (매우 중요!)
-try:
-    _create_unverified_https_context = ssl._create_unverified_context
-except AttributeError:
-    pass
-else:
-    ssl._create_default_https_context = _create_unverified_https_context
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
-# 기본 TOP 15 리스트 (그대로 유지!)
 DIVIDEND_STOCKS = [
     { "category": "kr-stock", "ticker": "005935.KS", "isUS": False, "period": "분기배당", "months": "3, 6, 9, 12월", "name": "삼성전자우 (005935)", "rate": 0.92, "desc": "국민 주식 삼성전자의 배당 우선 우선주, 국내 대표 분기 배당주" },
     { "category": "kr-stock", "ticker": "055550.KS", "isUS": False, "period": "분기배당", "months": "2, 4, 7, 11월", "name": "신한지주 (055550)", "rate": 2.78, "desc": "국내 금융지주사 중 최초로 분기 배당을 정착시킨 대표적인 고배당 은행주" },
@@ -37,83 +27,132 @@ DIVIDEND_STOCKS = [
     { "category": "us-etf", "ticker": "DIVO", "isUS": True, "period": "월배당", "months": "매달", "name": "Divo (앰플리파이 배당 수익 ETF)", "rate": 6.45, "desc": "미국 우량 대형주 투자와 전술적 커버드콜 옵션 매도를 활용하는 월배당 ETF" }
 ]
 
-cache = {}
-CACHE_TTL = 18000  # 5시간
+# 새로운 시간표 기반 캐시 저장소
+global_cache = {"schedule_key": "", "display_time": "", "stocks": []}
+single_stock_cache = {}
 
-# 💡 yfinance 대신 야후 파이낸스 직통 API 호출 함수 (사람인 척 User-Agent 추가!)
-def fetch_stock_data(ticker):
-    url = "https://query1.finance.yahoo.com/v7/finance/quote?symbols=" + ticker
-    # 크롬 브라우저인 것처럼 속이는 헤더
-    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
-    try:
-        with urllib.request.urlopen(req, timeout=5) as response:
-            data = json.loads(response.read().decode('utf-8'))
-            result = data.get('quoteResponse', {}).get('result', [])
-            if result:
-                return result[0]
-    except Exception as e:
-        print("데이터 가져오기 실패 [{0}]: {1}".format(ticker, e))
-    return None
+# 현재 시간이 어느 스케줄에 속하는지 계산하는 아주 똑똑한 함수
+def get_current_schedule():
+    now = datetime.datetime.now()
+    current_minutes = now.hour * 60 + now.minute
+    
+    if current_minutes >= 1410:   # 23:30 이후
+        target_h, target_m = 23, 30
+        target_date = now
+    elif current_minutes >= 900:  # 15:00 이후
+        target_h, target_m = 15, 0
+        target_date = now
+    elif current_minutes >= 750:  # 12:30 이후
+        target_h, target_m = 12, 30
+        target_date = now
+    elif current_minutes >= 570:  # 09:30 이후
+        target_h, target_m = 9, 30
+        target_date = now
+    else:                         # 09:30 이전이면 어제 23:30 데이터 사용!
+        target_h, target_m = 23, 30
+        target_date = now - datetime.timedelta(days=1)
+        
+    schedule_key = "{0:04d}{1:02d}{2:02d}-{3:02d}{4:02d}".format(
+        target_date.year, target_date.month, target_date.day, target_h, target_m)
+    display_time = "{0}시 {1:02d}분".format(target_h, target_m)
+    
+    return schedule_key, display_time
 
 
-# 1. 메인화면용 전체 리스트 가져오기
 @app.route('/api/stocks')
 def get_all_stocks():
-    current_time = time.time()
+    global global_cache
+    current_key, display_time = get_current_schedule()
+    
+    # 1. 만약 현재 시간표 키와 캐시 키가 똑같고, 데이터가 살아있다면? -> 야후에 안 물어보고 바로 0.1초 컷!
+    if global_cache["schedule_key"] == current_key and len(global_cache["stocks"]) > 0:
+        return jsonify({"update_time": display_time, "data": global_cache["stocks"]})
+        
+    # 2. 시간표가 넘어갔다면 (예: 12:29 -> 12:30) 새롭게 데이터를 긁어옵니다.
     response_data = []
     
     for stock in DIVIDEND_STOCKS:
         ticker = stock["ticker"]
-        if ticker in cache and (current_time - cache[ticker][0] < CACHE_TTL):
-            price = cache[ticker][1].get("price", 0)
-        else:
-            stock_info = fetch_stock_data(ticker)
-            if stock_info:
-                price = stock_info.get('regularMarketPrice', 0)
-                cache[ticker] = (current_time, {"price": price})
+        try:
+            ticker_obj = yf.Ticker(ticker)
+            hist = ticker_obj.history(period="1d")
+            if not hist.empty:
+                price = float(hist['Close'].iloc[-1])
             else:
-                price = 0 # 실패 시 0
-        
+                price = float(ticker_obj.fast_info['last_price'])
+                
+        except Exception as e:
+            print("Error [{0}]: {1}".format(ticker, str(e)))
+            # 에러가 나서 0원이 될 위기라면? 과거 캐시에 있던 가격을 끌어와서 0원 방어!
+            old_stock = next((s for s in global_cache["stocks"] if s["ticker"] == ticker), None)
+            price = old_stock["price"] if old_stock else 0
+            
         enriched_stock = stock.copy()
         enriched_stock["price"] = price
         response_data.append(enriched_stock)
         
-    return jsonify(response_data)
+    # 데이터베이스 갱신
+    global_cache["schedule_key"] = current_key
+    global_cache["display_time"] = display_time
+    global_cache["stocks"] = response_data
+    
+    return jsonify({"update_time": display_time, "data": response_data})
 
-# 2. 신규 추가 종목 실시간 검색
+
 @app.route('/api/stock')
 def get_single_stock():
     symbol = request.args.get('symbol', '').upper().strip()
     if not symbol:
         return jsonify({"error": "종목 코드가 없습니다."}), 400
         
-    current_time = time.time()
+    current_key, display_time = get_current_schedule()
     
-    # 캐시 확인
-    if symbol in cache and (current_time - cache[symbol][0] < CACHE_TTL) and "rate" in cache[symbol][1]:
-        return jsonify(cache[symbol][1])
+    # 개별 검색도 동일하게 시간표 방어막 적용
+    if symbol in single_stock_cache and single_stock_cache[symbol]["schedule_key"] == current_key:
+        result = single_stock_cache[symbol]["data"].copy()
+        result["update_time"] = display_time
+        return jsonify(result)
         
-    stock_info = fetch_stock_data(symbol)
-    if not stock_info:
-        return jsonify({"error": "종목을 찾을 수 없거나 데이터를 가져오는데 실패했습니다."}), 500
+    try:
+        ticker_obj = yf.Ticker(symbol)
+        hist = ticker_obj.history(period="1d")
         
-    price = stock_info.get('regularMarketPrice', 0)
-    rate = stock_info.get('trailingAnnualDividendYield', 0)
-    rate_percent = round(rate * 100, 2) if rate else 0.0
-    short_name = stock_info.get('shortName', symbol)
-    
-    stock_data = {
-        "ticker": symbol,
-        "price": price,
-        "rate": rate_percent,
-        "name": "{0} ({1})".format(short_name, symbol),
-        "desc": "실시간 검색으로 추가된 종목입니다.",
-        "period": "월배당" if rate_percent > 7.0 else "분기배당",
-        "months": "매달" if rate_percent > 7.0 else "3, 6, 9, 12월"
-    }
-    
-    cache[symbol] = (current_time, stock_data)
-    return jsonify(stock_data)
+        if not hist.empty:
+            price = float(hist['Close'].iloc[-1])
+        else:
+            price = float(ticker_obj.fast_info['last_price'])
+        
+        info = ticker_obj.info
+        rate = info.get('dividendYield', 0)
+        if not rate:
+            rate = info.get('trailingAnnualDividendYield', 0)
+        
+        rate_percent = round(rate * 100, 2) if rate else 0.0
+        
+        short_name = info.get('shortName', symbol)
+        summary = info.get('longBusinessSummary', '실시간으로 추가된 검색 종목입니다.')
+        if len(summary) > 50:
+            summary = summary[:50] + "..."
+            
+        stock_data = {
+            "ticker": symbol,
+            "price": price,
+            "rate": rate_percent,
+            "name": "{0} ({1})".format(short_name, symbol),
+            "desc": summary,
+            "period": "월배당" if rate_percent > 7.0 else "분기배당",
+            "months": "매달" if rate_percent > 7.0 else "3, 6, 9, 12월"
+        }
+        
+        if price > 0:
+            single_stock_cache[symbol] = {"schedule_key": current_key, "data": stock_data}
+            
+        stock_data_return = stock_data.copy()
+        stock_data_return["update_time"] = display_time
+        return jsonify(stock_data_return)
+        
+    except Exception as e:
+        return jsonify({"error": "종목을 찾을 수 없거나 실패했습니다: {0}".format(str(e))}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000, host='0.0.0.0')
+    app.run(debug=True, port=5000)
