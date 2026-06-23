@@ -6,7 +6,6 @@ import time
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
-
 # 기본 TOP 15 리스트
 DIVIDEND_STOCKS = [
     { "category": "kr-stock", "ticker": "005935.KS", "isUS": False, "period": "분기배당", "months": "3, 6, 9, 12월", "name": "삼성전자우 (005935)", "rate": 0.92, "desc": "국민 주식 삼성전자의 배당 우선 우선주, 국내 대표 분기 배당주" },
@@ -44,7 +43,8 @@ def get_all_stocks():
         else:
             try:
                 ticker_obj = yf.Ticker(ticker)
-                price = ticker_obj.fast_info['last_price']
+                hist = ticker_obj.history(period="1d")
+                price = float(hist['Close'].iloc[-1])
                 cache[ticker] = (current_time, {"price": price})
             except:
                 price = 0
@@ -70,7 +70,8 @@ def get_single_stock():
         
     try:
         ticker_obj = yf.Ticker(symbol)
-        price = ticker_obj.fast_info['last_price']
+        hist = ticker_obj.history(period="1d")
+        price = float(hist['Close'].iloc[-1])
         
         # 야후 파이낸스에서 배당 정보 추출
         info = ticker_obj.info
@@ -90,7 +91,7 @@ def get_single_stock():
             "ticker": symbol,
             "price": price,
             "rate": rate_percent,
-            "name": f"{short_name} ({symbol})",
+            "name": "{0} ({1})".format(short_name, symbol),
             "desc": summary,
             "period": "월배당" if rate_percent > 7.0 else "분기배당",
             "months": "매달" if rate_percent > 7.0 else "3, 6, 9, 12월"
@@ -99,7 +100,7 @@ def get_single_stock():
         cache[symbol] = (current_time, stock_data)
         return jsonify(stock_data)
     except Exception as e:
-        return jsonify({"error": f"종목을 찾을 수 없거나 실패했습니다: {str(e)}"}), 500
+        return jsonify({"error": "종목을 찾을 수 없거나 실패했습니다: {0}".format(str(e))}), 500
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
