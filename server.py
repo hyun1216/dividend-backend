@@ -125,21 +125,62 @@ def get_single_stock():
 
 @app.route('/api/search_ticker')
 def search_ticker():
-    query = request.args.get('q', '')
+    query = request.args.get('q', '').strip()
     if not query:
         return jsonify({"quotes": []})
         
-    url = "https://query2.finance.yahoo.com/v1/finance/search"
-    headers = {'User-Agent': 'Mozilla/5.0'}
+    quotes = []
     
-    # 💡 이렇게 params로 넘겨주면 파이썬이 알아서 한글을 완벽하게 인코딩해서 야후로 보내줘!
-    params = {'q': query, 'quotesCount': 10, 'newsCount': 0}
-    
+    # 💡 1단계: 한국 토박이 '네이버 금융 API' 먼저 털기 (한글 검색 완벽 대응)
     try:
-        res = requests.get(url, headers=headers, params=params)
-        return jsonify(res.json())
+        naver_url = "https://ac.finance.naver.com/ac"
+        naver_params = {
+            'q': query,
+            'q_enc': 'utf-8',
+            'st': '111',
+            'r_format': 'json',
+            'r_enc': 'utf-8'
+        }
+        naver_res = requests.get(naver_url, params=naver_params, headers={'User-Agent': 'Mozilla/5.0'}, timeout=3)
+        naver_data = naver_res.json()
+        
+        # 네이버가 한국 주식을 찾았다면 야후 입맛에 맞게 변장시켜서 담기
+        if 'items' in naver_data and len(naver_data['items']) > 0:
+            for item in naver_data['items'][0]:
+                if len(item) >= 2:
+                    name = item[0] # 예: 현대차2우B
+                    ticker = item[1] # 예: 005387
+                    market = item[2] if len(item) > 2 else ""
+                    
+                    # 야후용 티커로 변환 (.KS / .KQ)
+                    yahoo_ticker = ticker + ".KQ" if "KOSDAQ" in market else ticker + ".KS"
+                    
+                    quotes.append({
+                        "shortname": name,
+                        "longname": name,
+                        "symbol": yahoo_ticker,
+                        "exchange": "KOR"
+                    })
     except Exception as e:
-        return jsonify({"error": "통신 에러"}), 500
+        print("Naver API 검색 에러:", str(e))
+
+    # 💡 2단계: 글로벌 깡패 '야후 파이낸스 API' 털기 (미국 주식 및 영문 티커 대응)
+    try:
+        yahoo_url = "https://query2.finance.yahoo.com/v1/finance/search"
+        yahoo_params = {'q': query, 'quotesCount': 10, 'newsCount': 0}
+        yahoo_res = requests.get(yahoo_url, params=yahoo_params, headers={'User-Agent': 'Mozilla/5.0'}, timeout=3)
+        yahoo_data = yahoo_res.json()
+        
+        if 'quotes' in yahoo_data:
+            for q in yahoo_data['quotes']:
+                # 네이버에서 찾은 거랑 안 겹치는 것만 (예: AAPL, TSLA) 가방에 추가
+                if q.get('symbol') not in [x['symbol'] for x in quotes]:
+                    quotes.append(q)
+    except Exception as e:
+        print("Yahoo API 검색 에러:", str(e))
+
+    # 네이버랑 야후에서 훔쳐온 데이터 가방을 화면으로 던져주기!
+    return jsonify({"quotes": quotes})
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
