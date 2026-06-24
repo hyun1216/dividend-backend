@@ -129,12 +129,14 @@ def search_ticker():
     if not query:
         return jsonify({"quotes": []})
         
-    # Python 3.4 호환을 위해 format() 사용
-    url = "https://query2.finance.yahoo.com/v1/finance/search?q={0}&quotesCount=10&newsCount=0".format(query)
+    url = "https://query2.finance.yahoo.com/v1/finance/search"
     headers = {'User-Agent': 'Mozilla/5.0'}
     
+    # 💡 이렇게 params로 넘겨주면 파이썬이 알아서 한글을 완벽하게 인코딩해서 야후로 보내줘!
+    params = {'q': query, 'quotesCount': 10, 'newsCount': 0}
+    
     try:
-        res = requests.get(url, headers=headers)
+        res = requests.get(url, headers=headers, params=params)
         return jsonify(res.json())
     except Exception as e:
         return jsonify({"error": "통신 에러"}), 500
