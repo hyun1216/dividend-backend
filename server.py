@@ -4,6 +4,12 @@ import yfinance as yf
 import time
 from datetime import datetime
 import requests
+import urllib.request
+import json
+import ssl
+
+# SSL 인증 에러 방지용
+ssl._create_default_https_context = ssl._create_unverified_context
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
@@ -112,6 +118,76 @@ def get_single_stock():
     except Exception as e:
         return jsonify({"error": "종목을 찾을 수 없거나 실패했습니다: {0}".format(str(e))}), 500
     
+KRX_API_URL = "https://data-dbg.krx.co.kr/svc/apis/sto/stk_bydd_trd"
+KRX_AUTH_KEY = "F27E4E2DC4564CD6980AC9310636425A392217F9"
+
+# 서버 메모리에 상장종목 마스터를 캐싱할 전역 변수
+cached_krx_master = []
+
+def update_krx_master_data():
+    """KRX API를 찔러서 최근일자 기준 전 종목 코드와 이름을 가져와 캐싱하는 함수"""
+    global cached_krx_master
+    # Spec.docx 기준 basDd 파라미터가 필수이므로, 최근 평일 날짜(예: "20260623") 세팅
+    # (매번 수동으로 바꾸기 번거로우면 서버 실행 시점의 날짜를 datetime으로 구해서 넣어줄 수도 있어!)
+    payload = {"basDd": "20260623"} 
+    
+    req = urllib.request.Request(KRX_API_URL)
+    req.add_header("Authorization", "Bearer " + KRX_AUTH_KEY)
+    req.add_header("Content-Type", "application/json")
+    req.data = json.dumps(payload).encode('utf-8')
+    
+    try:
+        with urllib.request.urlopen(req) as response:
+            res_body = response.read()
+            res_json = json.loads(res_body.decode('utf-8'))
+            
+            out_block = res_json.get("OutBlock_1", [])
+            new_master = []
+            for item in out_block:
+                # ISU_CD(표준코드)에서 단축코드 6자리 추출 (보통 3~9번째 인덱스)
+                # 예: KR7005930003 -> 005930
+                code_str = item.get("ISU_CD", "")
+                short_code = code_str[3:9] if code_str.startswith("KR7") else code_str[:6]
+                
+                new_master.append({
+                    "code": short_code,
+                    "name": item.get("ISU_NM")
+                })
+                
+            if new_master:
+                cached_krx_master = new_master
+                print("KRX 종목 마스터 데이터 구축 완료: {0}개 종목".format(len(cached_krx_master)))
+    except Exception as e:
+        print("KRX 마스터 갱신 실패:", str(e))
+
+@app.route('/api/search_krx_stock')
+def search_krx_stock():
+    """검색어(q)를 받아 cached_krx_master에서 일치하는 종목들을 반환하는 엔드포인트"""
+    query = request.args.get('q', '').strip().lower()
+    if not query or len(query) < 1:
+        return jsonify({"results": []})
+        
+    # 서버 메모리에 마스터 데이터가 비어있다면 최초 1회 자동 구축
+    if not cached_krx_master:
+        update_krx_master_data()
+        
+    matches = []
+    for stock in cached_krx_master:
+        # 검색어가 종목명이나 종목코드(6자리)에 포함되어 있는지 확인 ("삼성" 또는 "005930" 매칭)
+        if query in stock["name"].lower() or query in stock["code"].lower():
+            # 코스피인지 코스닥인지 구분하여 .KS 또는 .KQ를 붙여줌
+            # (유가증권 일별매매정보는 코스피 위주이므로 기본적으로 .KS를 결합)
+            matches.append({
+                "name": stock["name"],
+                "ticker": stock["code"] + ".KS"
+            })
+            
+        # 너무 많이 뜨면 화면이 복잡해지니 최대 10개로 제한
+        if len(matches) >= 10:
+            break
+            
+    return jsonify({"results": matches})
+
 @app.route('/api/search_ticker')
 def search_ticker():
     query = request.args.get('q', '')
