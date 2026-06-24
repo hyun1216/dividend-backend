@@ -3,6 +3,7 @@ from flask_cors import CORS
 import yfinance as yf
 import time
 from datetime import datetime
+import requests
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
@@ -120,6 +121,23 @@ def get_single_stock():
         return jsonify(stock_data)
     except Exception as e:
         return jsonify({"error": "종목을 찾을 수 없거나 실패했습니다: {0}".format(str(e))}), 500
+    
+
+@app.route('/api/search_ticker')
+def search_ticker():
+    query = request.args.get('q', '')
+    if not query:
+        return jsonify({"quotes": []})
+        
+    # Python 3.4 호환을 위해 format() 사용
+    url = "https://query2.finance.yahoo.com/v1/finance/search?q={0}&quotesCount=10&newsCount=0".format(query)
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    
+    try:
+        res = requests.get(url, headers=headers)
+        return jsonify(res.json())
+    except Exception as e:
+        return jsonify({"error": "통신 에러"}), 500
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
