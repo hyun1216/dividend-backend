@@ -3,9 +3,7 @@ from flask_cors import CORS
 import yfinance as yf
 import time
 from datetime import datetime
-import json
-import urllib.request
-import ssl
+import requests
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
@@ -32,7 +30,7 @@ DIVIDEND_STOCKS = [
 ]
 
 cache = {}
-CACHE_TTL = 18000  # 5시간
+CACHE_TTL = 18000
 
 @app.route('/api/stocks')
 def get_all_stocks():
@@ -47,10 +45,7 @@ def get_all_stocks():
             try:
                 ticker_obj = yf.Ticker(ticker)
                 hist = ticker_obj.history(period="1d")
-                if not hist.empty:
-                    price = float(hist['Close'].iloc[-1])
-                else:
-                    price = 0
+                price = float(hist['Close'].iloc[-1]) if not hist.empty else 0
                 cache[ticker] = (current_time, {"price": price})
             except:
                 price = 0
@@ -60,11 +55,7 @@ def get_all_stocks():
         response_data.append(enriched_stock)
         
     update_time_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-    
-    return jsonify({
-        "data": response_data,
-        "update_time": update_time_str
-    })
+    return jsonify({"data": response_data, "update_time": update_time_str})
 
 @app.route('/api/stock')
 def get_single_stock():
@@ -73,31 +64,33 @@ def get_single_stock():
         return jsonify({"error": "종목 코드가 없습니다."}), 400
         
     current_time = time.time()
-    
     if symbol in cache and (current_time - cache[symbol][0] < CACHE_TTL) and "rate" in cache[symbol][1]:
         return jsonify(cache[symbol][1])
         
     try:
         ticker_obj = yf.Ticker(symbol)
         hist = ticker_obj.history(period="1d")
-        if not hist.empty:
-            price = float(hist['Close'].iloc[-1])
-        else:
-            price = 0.0
+        price = float(hist['Close'].iloc[-1]) if not hist.empty else 0.0
         
         info = ticker_obj.info
         
-        dividend_rate_amount = info.get('dividendRate', 0)
-        if not dividend_rate_amount:
-            dividend_rate_amount = info.get('trailingAnnualDividendRate', 0)
+        dividend_rate_amount = info.get('dividendRate', 0) or info.get('trailingAnnualDividendRate', 0)
+        rate_fallback = info.get('dividendYield', 0) or info.get('trailingAnnualDividendYield', 0)
         
+        # 1차 배당률 계산
         if dividend_rate_amount and price > 0:
             rate_percent = round((dividend_rate_amount / price) * 100, 2)
+        elif rate_fallback:
+            rate_percent = round(rate_fallback * 100, 2)
         else:
-            rate_fallback = info.get('dividendYield', 0)
-            if not rate_fallback:
-                rate_fallback = info.get('trailingAnnualDividendYield', 0)
-            rate_percent = round(rate_fallback * 100, 2) if rate_fallback else 0.0
+            rate_percent = 0.0
+            
+        # 🚨 8214% 같은 야후 파이낸스 미친 오류 방어벽 🚨
+        if rate_percent > 50.0: 
+            if rate_fallback and round(rate_fallback * 100, 2) < 50.0:
+                rate_percent = round(rate_fallback * 100, 2)
+            else:
+                rate_percent = 0.0 # 상식 밖의 수치는 성장주/데이터오류로 간주하여 0% 처리
         
         short_name = info.get('shortName', symbol)
         summary = info.get('longBusinessSummary', '실시간으로 추가된 검색 종목입니다.')
@@ -118,27 +111,21 @@ def get_single_stock():
         return jsonify(stock_data)
     except Exception as e:
         return jsonify({"error": "종목을 찾을 수 없거나 실패했습니다: {0}".format(str(e))}), 500
-
-# 🚨 새롭게 수정된 야후 스파이 함수 (내장 모듈 urllib 사용) 🚨
+    
 @app.route('/api/search_ticker')
 def search_ticker():
     query = request.args.get('q', '')
     if not query:
         return jsonify({"quotes": []})
         
-    url = "https://query2.finance.yahoo.com/v1/finance/search?q={0}&quotesCount=10&newsCount=0".format(query)
-    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+    url = "https://query2.finance.yahoo.com/v1/finance/search"
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    params = {'q': query, 'quotesCount': 10, 'newsCount': 0}
     
     try:
-        # 인증서 우회 (파이썬 구버전 호환용 안전 장치)
-        context = ssl._create_unverified_context() if hasattr(ssl, '_create_unverified_context') else None
-        
-        with urllib.request.urlopen(req, context=context) as response:
-            data = json.loads(response.read().decode('utf-8'))
-            
-        return jsonify(data)
+        res = requests.get(url, headers=headers, params=params)
+        return jsonify(res.json())
     except Exception as e:
-        print("야후 검색 에러:", str(e))
         return jsonify({"error": "통신 에러"}), 500
 
 if __name__ == '__main__':
