@@ -2,19 +2,17 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 import yfinance as yf
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 import requests
-import urllib.request
-import json
-import ssl
+import warnings
 
-# SSL 인증 에러 방지용
-ssl._create_default_https_context = ssl._create_unverified_context
+# SSL 인증서 경고 숨기기
+warnings.filterwarnings('ignore', message='Unverified HTTPS request')
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
-# 기본 TOP 15 리스트
+# --- (기존 DIVIDEND_STOCKS 및 get_all_stocks, get_single_stock 로직은 유지) ---
 DIVIDEND_STOCKS = [
     { "category": "kr-stock", "ticker": "005935.KS", "isUS": False, "period": "분기배당", "months": "3, 6, 9, 12월", "name": "삼성전자우 (005935)", "rate": 0.92, "desc": "국민 주식 삼성전자의 배당 우선 우선주, 국내 대표 분기 배당주" },
     { "category": "kr-stock", "ticker": "055550.KS", "isUS": False, "period": "분기배당", "months": "2, 4, 7, 11월", "name": "신한지주 (055550)", "rate": 2.78, "desc": "국내 금융지주사 중 최초로 분기 배당을 정착시킨 대표적인 고배당 은행주" },
@@ -36,13 +34,12 @@ DIVIDEND_STOCKS = [
 ]
 
 cache = {}
-CACHE_TTL = 18000
+CACHE_TTL = 18000  
 
 @app.route('/api/stocks')
 def get_all_stocks():
     current_time = time.time()
     response_data = []
-    
     for stock in DIVIDEND_STOCKS:
         ticker = stock["ticker"]
         if ticker in cache and (current_time - cache[ticker][0] < CACHE_TTL):
@@ -55,7 +52,6 @@ def get_all_stocks():
                 cache[ticker] = (current_time, {"price": price})
             except:
                 price = 0
-        
         enriched_stock = stock.copy()
         enriched_stock["price"] = price
         response_data.append(enriched_stock)
@@ -66,8 +62,7 @@ def get_all_stocks():
 @app.route('/api/stock')
 def get_single_stock():
     symbol = request.args.get('symbol', '').upper().strip()
-    if not symbol:
-        return jsonify({"error": "종목 코드가 없습니다."}), 400
+    if not symbol: return jsonify({"error": "종목 코드가 없습니다."}), 400
         
     current_time = time.time()
     if symbol in cache and (current_time - cache[symbol][0] < CACHE_TTL) and "rate" in cache[symbol][1]:
@@ -79,130 +74,130 @@ def get_single_stock():
         price = float(hist['Close'].iloc[-1]) if not hist.empty else 0.0
         
         info = ticker_obj.info
-        
         dividend_rate_amount = info.get('dividendRate', 0) or info.get('trailingAnnualDividendRate', 0)
-        rate_fallback = info.get('dividendYield', 0) or info.get('trailingAnnualDividendYield', 0)
         
-        # 1차 배당률 계산
         if dividend_rate_amount and price > 0:
             rate_percent = round((dividend_rate_amount / price) * 100, 2)
-        elif rate_fallback:
-            rate_percent = round(rate_fallback * 100, 2)
         else:
-            rate_percent = 0.0
-            
-        # 🚨 8214% 같은 야후 파이낸스 미친 오류 방어벽 🚨
-        if rate_percent > 50.0: 
-            if rate_fallback and round(rate_fallback * 100, 2) < 50.0:
-                rate_percent = round(rate_fallback * 100, 2)
-            else:
-                rate_percent = 0.0 # 상식 밖의 수치는 성장주/데이터오류로 간주하여 0% 처리
+            rate_fallback = info.get('dividendYield', 0) or info.get('trailingAnnualDividendYield', 0)
+            rate_percent = round(rate_fallback * 100, 2) if rate_fallback else 0.0
+        
+        # 8214% 같은 야후 오류 방어
+        if rate_percent > 50.0: rate_percent = 0.0 
         
         short_name = info.get('shortName', symbol)
         summary = info.get('longBusinessSummary', '실시간으로 추가된 검색 종목입니다.')
-        if summary and len(summary) > 50:
-            summary = summary[:50] + "..."
+        if summary and len(summary) > 50: summary = summary[:50] + "..."
             
         stock_data = {
-            "ticker": symbol,
-            "price": price,
-            "rate": rate_percent,
-            "name": "{0} ({1})".format(short_name, symbol),
-            "desc": summary,
+            "ticker": symbol, "price": price, "rate": rate_percent,
+            "name": "{0} ({1})".format(short_name, symbol), "desc": summary,
             "period": "월배당" if rate_percent > 7.0 else "분기배당",
             "months": "매달" if rate_percent > 7.0 else "3, 6, 9, 12월"
         }
-        
         cache[symbol] = (current_time, stock_data)
         return jsonify(stock_data)
     except Exception as e:
         return jsonify({"error": "종목을 찾을 수 없거나 실패했습니다: {0}".format(str(e))}), 500
     
+# =========================================================================
+# 🚨 새봄이가 뚫어온 한국거래소(KRX) API 연동 마스터 데이터 로직 🚨
+# =========================================================================
 KRX_API_URL = "https://data-dbg.krx.co.kr/svc/apis/sto/stk_bydd_trd"
 KRX_AUTH_KEY = "F27E4E2DC4564CD6980AC9310636425A392217F9"
-
-# 서버 메모리에 상장종목 마스터를 캐싱할 전역 변수
 cached_krx_master = []
 
+def get_recent_biz_day():
+    """KRX 데이터가 존재하는 가장 최근 영업일(평일)을 안전하게 계산"""
+    today = datetime.now()
+    yesterday = today - timedelta(days=1)
+    if yesterday.weekday() == 5: # 토요일이면 목/금요일로
+        yesterday = today - timedelta(days=2)
+    elif yesterday.weekday() == 6: # 일요일이면 금요일로
+        yesterday = today - timedelta(days=3)
+    return yesterday.strftime("%Y%m%d")
+
 def update_krx_master_data():
-    """KRX API를 찔러서 최근일자 기준 전 종목 코드와 이름을 가져와 캐싱하는 함수"""
+    """서버 최초 구동 시 KRX 전체 종목을 1번만 싹 가져와서 저장해두는 함수"""
     global cached_krx_master
-    # Spec.docx 기준 basDd 파라미터가 필수이므로, 최근 평일 날짜(예: "20260623") 세팅
-    # (매번 수동으로 바꾸기 번거로우면 서버 실행 시점의 날짜를 datetime으로 구해서 넣어줄 수도 있어!)
-    payload = {"basDd": "20260623"} 
+    basDd = get_recent_biz_day()
     
-    req = urllib.request.Request(KRX_API_URL)
-    req.add_header("Authorization", "Bearer " + KRX_AUTH_KEY)
-    req.add_header("Content-Type", "application/json")
-    req.data = json.dumps(payload).encode('utf-8')
+    headers = {
+        "Authorization": "Bearer " + KRX_AUTH_KEY,
+        "Content-Type": "application/json"
+    }
     
     try:
-        with urllib.request.urlopen(req) as response:
-            res_body = response.read()
-            res_json = json.loads(res_body.decode('utf-8'))
+        # 공공 API 명세(InBlock_1)에 맞게 GET 파라미터 또는 POST JSON으로 시도
+        res = requests.get(KRX_API_URL, headers=headers, params={"basDd": basDd}, verify=False, timeout=5)
+        if res.status_code != 200 or "OutBlock_1" not in res.text:
+            res = requests.post(KRX_API_URL, headers=headers, json={"basDd": basDd}, verify=False, timeout=5)
             
-            out_block = res_json.get("OutBlock_1", [])
-            new_master = []
-            for item in out_block:
-                # ISU_CD(표준코드)에서 단축코드 6자리 추출 (보통 3~9번째 인덱스)
-                # 예: KR7005930003 -> 005930
-                code_str = item.get("ISU_CD", "")
-                short_code = code_str[3:9] if code_str.startswith("KR7") else code_str[:6]
-                
-                new_master.append({
-                    "code": short_code,
-                    "name": item.get("ISU_NM")
-                })
-                
-            if new_master:
-                cached_krx_master = new_master
-                print("KRX 종목 마스터 데이터 구축 완료: {0}개 종목".format(len(cached_krx_master)))
-    except Exception as e:
-        print("KRX 마스터 갱신 실패:", str(e))
-
-@app.route('/api/search_krx_stock')
-def search_krx_stock():
-    """검색어(q)를 받아 cached_krx_master에서 일치하는 종목들을 반환하는 엔드포인트"""
-    query = request.args.get('q', '').strip().lower()
-    if not query or len(query) < 1:
-        return jsonify({"results": []})
-        
-    # 서버 메모리에 마스터 데이터가 비어있다면 최초 1회 자동 구축
-    if not cached_krx_master:
-        update_krx_master_data()
-        
-    matches = []
-    for stock in cached_krx_master:
-        # 검색어가 종목명이나 종목코드(6자리)에 포함되어 있는지 확인 ("삼성" 또는 "005930" 매칭)
-        if query in stock["name"].lower() or query in stock["code"].lower():
-            # 코스피인지 코스닥인지 구분하여 .KS 또는 .KQ를 붙여줌
-            # (유가증권 일별매매정보는 코스피 위주이므로 기본적으로 .KS를 결합)
-            matches.append({
-                "name": stock["name"],
-                "ticker": stock["code"] + ".KS"
+        out_block = res.json().get("OutBlock_1", [])
+        new_master = []
+        for item in out_block:
+            code_str = item.get("ISU_CD", "")
+            name = item.get("ISU_NM", "")
+            mkt = item.get("MKT_NM", "")
+            
+            # KR7005930003 같은 12자리 표준코드에서 6자리 단축코드만 쏙 빼기
+            short_code = code_str[3:9] if code_str.startswith("KR7") else code_str[:6]
+            # 코스닥/코스피 야후 티커용 접미사 부여
+            suffix = ".KQ" if "KOSDAQ" in mkt or "코스닥" in mkt else ".KS"
+            
+            new_master.append({
+                "code": short_code,
+                "ticker": short_code + suffix,
+                "name": name
             })
             
-        # 너무 많이 뜨면 화면이 복잡해지니 최대 10개로 제한
-        if len(matches) >= 10:
-            break
-            
-    return jsonify({"results": matches})
+        if new_master:
+            cached_krx_master = new_master
+            print("KRX 종목 마스터 업데이트 완료! 총 {0}개 (기준일: {1})".format(len(new_master), basDd))
+    except Exception as e:
+        print("KRX 마스터 데이터 갱신 실패:", str(e))
 
 @app.route('/api/search_ticker')
 def search_ticker():
-    query = request.args.get('q', '')
+    query = request.args.get('q', '').strip().lower()
     if not query:
         return jsonify({"quotes": []})
         
-    url = "https://query2.finance.yahoo.com/v1/finance/search"
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    params = {'q': query, 'quotesCount': 10, 'newsCount': 0}
+    quotes = []
     
-    try:
-        res = requests.get(url, headers=headers, params=params)
-        return jsonify(res.json())
-    except Exception as e:
-        return jsonify({"error": "통신 에러"}), 500
+    # 💡 1단계: 서버 메모리에 KRX 리스트가 없으면 최초 1회 다운로드!
+    if not cached_krx_master:
+        update_krx_master_data()
+        
+    # 💡 2단계: 네이버 안 거치고, 서버 메모리에서 빛의 속도로 초성/한글 검색!
+    for stock in cached_krx_master:
+        # 검색어가 이름이나 6자리 코드에 포함되어 있으면 매칭
+        if query in stock["name"].lower() or query in stock["code"]:
+            quotes.append({
+                "shortname": stock["name"],
+                "longname": stock["name"],
+                "symbol": stock["ticker"],
+                "exchange": "KOR"
+            })
+        if len(quotes) >= 15: # 너무 많이 나오면 렉 걸리니 15개 컷
+            break
+            
+    # 💡 3단계: 국내 주식이 아니거나(예: AAPL 검색), 못 찾았으면 글로벌 야후 API로 우회 검색!
+    if not quotes or query.isascii():
+        try:
+            yahoo_url = "https://query2.finance.yahoo.com/v1/finance/search"
+            yahoo_params = {'q': query, 'quotesCount': 10, 'newsCount': 0}
+            yahoo_res = requests.get(yahoo_url, params=yahoo_params, headers={'User-Agent': 'Mozilla/5.0'}, timeout=3)
+            yahoo_data = yahoo_res.json()
+            
+            if 'quotes' in yahoo_data:
+                for q in yahoo_data['quotes']:
+                    if q.get('symbol') not in [x['symbol'] for x in quotes]:
+                        quotes.append(q)
+        except Exception as e:
+            print("Yahoo API 검색 에러:", str(e))
+
+    return jsonify({"quotes": quotes})
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
