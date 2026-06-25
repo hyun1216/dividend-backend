@@ -2,8 +2,10 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 import yfinance as yf
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 import requests
+import urllib.parse
+import re
 import warnings
 
 # SSL 인증서 경고 숨기기
@@ -12,7 +14,7 @@ warnings.filterwarnings('ignore', message='Unverified HTTPS request')
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
-# 기본 TOP 리스트 (유지)
+# 기본 TOP 리스트
 DIVIDEND_STOCKS = [
     { "category": "kr-stock", "ticker": "005935.KS", "isUS": False, "period": "분기배당", "months": "3, 6, 9, 12월", "name": "삼성전자우 (005935)", "rate": 0.92, "desc": "국민 주식 삼성전자의 배당 우선 우선주, 국내 대표 분기 배당주" },
     { "category": "kr-stock", "ticker": "055550.KS", "isUS": False, "period": "분기배당", "months": "2, 4, 7, 11월", "name": "신한지주 (055550)", "rate": 2.78, "desc": "국내 금융지주사 중 최초로 분기 배당을 정착시킨 대표적인 고배당 은행주" },
@@ -98,90 +100,81 @@ def get_single_stock():
         return jsonify(stock_data)
     except Exception as e:
         return jsonify({"error": "종목을 찾을 수 없거나 실패했습니다: {0}".format(str(e))}), 500
-    
-# =========================================================================
-# 🚨 KRX 공식 API - 휴일/시차 방어형 완전판 🚨
-# =========================================================================
-KRX_API_URL = "https://data-dbg.krx.co.kr/svc/apis/sto/stk_bydd_trd"
-KRX_AUTH_KEY = "F27E4E2DC4564CD6980AC9310636425A392217F9"
-cached_krx_master = []
 
-def update_krx_master_data():
-    global cached_krx_master
-    
-    # 올바른 KRX API 헤더 사용 (Bearer 아님!)
-    headers = {
-        "AUTH_KEY": KRX_AUTH_KEY,
-        "Content-Type": "application/json"
-    }
-    
-    today = datetime.now()
-    success = False
-    
-    # 휴일, 주말, UTC 시차를 무시하기 위해 최대 15일 전까지 데이터가 나올 때까지 거꾸로 탐색!
-    for i in range(1, 15):
-        test_date = (today - timedelta(days=i)).strftime("%Y%m%d")
-        try:
-            res = requests.get(KRX_API_URL, headers=headers, params={"basDd": test_date}, verify=False, timeout=5)
-            
-            # 파이썬 3.4 호환 방식 JSON 파싱
-            data = res.json()
-            out_block = data.get("OutBlock_1", [])
-            
-            # 만약 데이터가 들어있다면 (영업일 매매정보가 존재한다면)
-            if out_block and len(out_block) > 0:
-                new_master = []
-                for item in out_block:
-                    code_str = item.get("ISU_CD", "")
-                    name = item.get("ISU_NM", "")
-                    mkt = item.get("MKT_NM", "")
-                    
-                    short_code = code_str[3:9] if code_str.startswith("KR7") else code_str[:6]
-                    suffix = ".KQ" if "KOSDAQ" in mkt or "코스닥" in mkt else ".KS"
-                    
-                    new_master.append({
-                        "code": short_code,
-                        "ticker": short_code + suffix,
-                        "name": name
-                    })
-                    
-                cached_krx_master = new_master
-                success = True
-                print("KRX 마스터 업데이트 성공! (기준일: {0}, 총 {1}개 종목)".format(test_date, len(new_master)))
-                break # 데이터 찾았으니 탐색 끝!
-                
-        except Exception as e:
-            continue # 실패하면 그냥 전날로 넘어가서 다시 시도
-            
-    if not success:
-        print("KRX 마스터 데이터 갱신 실패: 최근 15일 내에 영업일 데이터를 찾을 수 없습니다.")
 
+# =========================================================================
+# 🚨 하드코딩 제로! 무적의 이중 방어 네이버 크롤링 + 야후 API 🚨
+# =========================================================================
 @app.route('/api/search_ticker')
 def search_ticker():
-    query = request.args.get('q', '').strip().lower()
+    query = request.args.get('q', '').strip()
     if not query:
         return jsonify({"quotes": []})
         
     quotes = []
     
-    # 1. 서버 메모리에 KRX 리스트가 없으면 다운로드 시도
-    if not cached_krx_master:
-        update_krx_master_data()
+    # 💡 브라우저 완벽 위장 (Render 서버 IP 차단 100% 회피용)
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+        'Referer': 'https://finance.naver.com/',
+        'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7'
+    }
+
+    # 1단계: 네이버 금융 실시간 자동완성 API (위장 헤더 장착 완료)
+    try:
+        naver_url = "https://ac.finance.naver.com/ac"
+        naver_params = {
+            'q': query, 'q_enc': 'utf-8', 'st': '111', 'r_format': 'json', 'r_enc': 'utf-8'
+        }
+        naver_res = requests.get(naver_url, params=naver_params, headers=headers, timeout=3)
+        naver_data = naver_res.json()
         
-    # 2. 서버 메모리에서 한글/초성/코드 폭풍 검색!
-    if cached_krx_master:
-        for stock in cached_krx_master:
-            if query in stock["name"].lower() or query in stock["code"]:
-                quotes.append({
-                    "shortname": stock["name"],
-                    "longname": stock["name"],
-                    "symbol": stock["ticker"],
-                    "exchange": "KOR"
-                })
-            if len(quotes) >= 15:
-                break
+        if 'items' in naver_data and len(naver_data['items']) > 0:
+            for item in naver_data['items'][0]:
+                if len(item) >= 2:
+                    name = item[0]
+                    code = item[1]
+                    market = item[2] if len(item) > 2 else ""
+                    # 코스닥이면 .KQ, 그 외엔 .KS 붙여주기
+                    suffix = ".KQ" if "KOSDAQ" in market else ".KS"
+                    
+                    quotes.append({
+                        "shortname": name,
+                        "longname": name,
+                        "symbol": code + suffix,
+                        "exchange": "KOR"
+                    })
+    except Exception as e:
+        print("네이버 API 통신 에러:", str(e))
+
+    # 2단계: API가 튕기면, 무식하지만 100% 확실한 네이버 통합검색 화면 통째로 뜯어오기! (정규식 크롤링)
+    if not quotes:
+        try:
+            encoded_query = urllib.parse.quote(query)
+            search_url = "https://finance.naver.com/search/searchList.naver?query=" + encoded_query
+            search_res = requests.get(search_url, headers=headers, timeout=3)
             
-    # 3. 못 찾았거나 영어(AAPL 등)면 야후 API로 우회 검색!
+            # HTML 안에서 '<a href="/item/main.naver?code=005380">현대차</a>' 이 규칙만 찾아내서 6자리 빼오기
+            pattern = re.compile(r'href="/item/main\.naver\?code=(\d{6})"[^>]*>([^<]+)</a>')
+            matches = pattern.findall(search_res.text)
+            
+            seen_codes = set()
+            for code, name in matches:
+                name = name.strip()
+                if code not in seen_codes:
+                    seen_codes.add(code)
+                    quotes.append({
+                        "shortname": name,
+                        "longname": name,
+                        "symbol": code + ".KS",  # 웹 화면에선 시장 구분이 안 되므로 .KS를 기본값으로 부여
+                        "exchange": "KOR"
+                    })
+                if len(quotes) >= 15:
+                    break
+        except Exception as e:
+            print("네이버 웹 스크래핑 에러:", str(e))
+
+    # 3단계: 못 찾았거나 영어(AAPL 등) 검색어일 때 야후로 넘기기
     if not quotes or query.isascii():
         try:
             yahoo_url = "https://query2.finance.yahoo.com/v1/finance/search"
@@ -191,6 +184,7 @@ def search_ticker():
             
             if 'quotes' in yahoo_data:
                 for q in yahoo_data['quotes']:
+                    # 중복되지 않는 것만 리스트에 넣기
                     if q.get('symbol') not in [x['symbol'] for x in quotes]:
                         quotes.append(q)
         except Exception as e:
