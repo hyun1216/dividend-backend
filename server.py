@@ -2,10 +2,9 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 import yfinance as yf
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 import requests
-import urllib.parse
-import re
+import threading
 import warnings
 
 # SSL 인증서 경고 숨기기
@@ -14,7 +13,7 @@ warnings.filterwarnings('ignore', message='Unverified HTTPS request')
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
-# 기본 TOP 리스트
+# --- (기존 DIVIDEND_STOCKS 및 get_all_stocks, get_single_stock 로직은 유지) ---
 DIVIDEND_STOCKS = [
     { "category": "kr-stock", "ticker": "005935.KS", "isUS": False, "period": "분기배당", "months": "3, 6, 9, 12월", "name": "삼성전자우 (005935)", "rate": 0.92, "desc": "국민 주식 삼성전자의 배당 우선 우선주, 국내 대표 분기 배당주" },
     { "category": "kr-stock", "ticker": "055550.KS", "isUS": False, "period": "분기배당", "months": "2, 4, 7, 11월", "name": "신한지주 (055550)", "rate": 2.78, "desc": "국내 금융지주사 중 최초로 분기 배당을 정착시킨 대표적인 고배당 은행주" },
@@ -84,6 +83,7 @@ def get_single_stock():
             rate_fallback = info.get('dividendYield', 0) or info.get('trailingAnnualDividendYield', 0)
             rate_percent = round(rate_fallback * 100, 2) if rate_fallback else 0.0
         
+        # 8214% 같은 야후 오류 방어
         if rate_percent > 50.0: rate_percent = 0.0 
         
         short_name = info.get('shortName', symbol)
@@ -100,92 +100,173 @@ def get_single_stock():
         return jsonify(stock_data)
     except Exception as e:
         return jsonify({"error": "종목을 찾을 수 없거나 실패했습니다: {0}".format(str(e))}), 500
-
-
+    
 # =========================================================================
-# 🚨 하드코딩 제로! 무적의 이중 방어 네이버 크롤링 + 야후 API 🚨
+# 🚨 KRX API 연동 마스터 데이터 로직 (한글 검색 버그 수정판) 🚨
 # =========================================================================
+KRX_API_URL = "https://data-dbg.krx.co.kr/svc/apis/sto/stk_bydd_trd"
+KRX_AUTH_KEY = "F27E4E2DC4564CD6980AC9310636425A392217F9"
+cached_krx_master = []
+
+# ✅ DIVIDEND_STOCKS 기반 내장 검색 사전 (KRX API 실패 시 최소 보장용)
+# 한글 이름 → 야후 티커 매핑
+BUILTIN_KR_STOCKS = [
+    {"code": "005930", "ticker": "005930.KS", "name": "삼성전자"},
+    {"code": "005935", "ticker": "005935.KS", "name": "삼성전자우"},
+    {"code": "000660", "ticker": "000660.KS", "name": "SK하이닉스"},
+    {"code": "035420", "ticker": "035420.KS", "name": "NAVER"},
+    {"code": "035720", "ticker": "035720.KS", "name": "카카오"},
+    {"code": "005380", "ticker": "005380.KS", "name": "현대차"},
+    {"code": "005387", "ticker": "005387.KS", "name": "현대차2우B"},
+    {"code": "005385", "ticker": "005385.KS", "name": "현대차우"},
+    {"code": "051910", "ticker": "051910.KS", "name": "LG화학"},
+    {"code": "066570", "ticker": "066570.KS", "name": "LG전자"},
+    {"code": "066575", "ticker": "066575.KS", "name": "LG전자우"},
+    {"code": "055550", "ticker": "055550.KS", "name": "신한지주"},
+    {"code": "105560", "ticker": "105560.KS", "name": "KB금융"},
+    {"code": "086790", "ticker": "086790.KS", "name": "하나금융지주"},
+    {"code": "316140", "ticker": "316140.KS", "name": "우리금융지주"},
+    {"code": "032830", "ticker": "032830.KS", "name": "삼성생명"},
+    {"code": "017670", "ticker": "017670.KS", "name": "SK텔레콤"},
+    {"code": "030200", "ticker": "030200.KS", "name": "KT"},
+    {"code": "032640", "ticker": "032640.KS", "name": "LG유플러스"},
+    {"code": "003550", "ticker": "003550.KS", "name": "LG"},
+    {"code": "034220", "ticker": "034220.KS", "name": "LG디스플레이"},
+    {"code": "018260", "ticker": "018260.KS", "name": "삼성에스디에스"},
+    {"code": "028260", "ticker": "028260.KS", "name": "삼성물산"},
+    {"code": "000810", "ticker": "000810.KS", "name": "삼성화재"},
+    {"code": "009150", "ticker": "009150.KS", "name": "삼성전기"},
+    {"code": "088980", "ticker": "088980.KS", "name": "맥쿼리인프라"},
+    {"code": "012330", "ticker": "012330.KS", "name": "현대모비스"},
+    {"code": "006400", "ticker": "006400.KS", "name": "삼성SDI"},
+    {"code": "207940", "ticker": "207940.KS", "name": "삼성바이오로직스"},
+    {"code": "068270", "ticker": "068270.KS", "name": "셀트리온"},
+    {"code": "096770", "ticker": "096770.KS", "name": "SK이노베이션"},
+    {"code": "034730", "ticker": "034730.KS", "name": "SK"},
+    {"code": "011200", "ticker": "011200.KS", "name": "HMM"},
+    {"code": "010950", "ticker": "010950.KS", "name": "S-Oil"},
+    {"code": "000270", "ticker": "000270.KS", "name": "기아"},
+    {"code": "015760", "ticker": "015760.KS", "name": "한국전력"},
+    {"code": "003490", "ticker": "003490.KS", "name": "대한항공"},
+    {"code": "047050", "ticker": "047050.KS", "name": "포스코인터내셔널"},
+    {"code": "005490", "ticker": "005490.KS", "name": "POSCO홀딩스"},
+    {"code": "000100", "ticker": "000100.KS", "name": "유한양행"},
+    {"code": "090430", "ticker": "090430.KS", "name": "아모레퍼시픽"},
+    {"code": "033780", "ticker": "033780.KS", "name": "KT&G"},
+    {"code": "004020", "ticker": "004020.KS", "name": "현대제철"},
+    {"code": "138040", "ticker": "138040.KS", "name": "메리츠금융지주"},
+    {"code": "267250", "ticker": "267250.KS", "name": "HD현대"},
+    {"code": "042660", "ticker": "042660.KS", "name": "한화오션"},
+    {"code": "009830", "ticker": "009830.KS", "name": "한화솔루션"},
+    {"code": "000720", "ticker": "000720.KS", "name": "현대건설"},
+    {"code": "011780", "ticker": "011780.KS", "name": "금호석유"},
+    {"code": "071050", "ticker": "071050.KS", "name": "한국금융지주"},
+    # 자주 검색되는 우선주
+    {"code": "000815", "ticker": "000815.KS", "name": "삼성화재우"},
+    {"code": "009155", "ticker": "009155.KS", "name": "삼성전기우"},
+    {"code": "034725", "ticker": "034725.KS", "name": "SK우"},
+    {"code": "096775", "ticker": "096775.KS", "name": "SK이노베이션우"},
+    {"code": "051915", "ticker": "051915.KS", "name": "LG화학우"},
+]
+
+def get_recent_biz_day():
+    """KRX 데이터가 존재하는 가장 최근 영업일(평일)을 안전하게 계산"""
+    today = datetime.now()
+    yesterday = today - timedelta(days=1)
+    if yesterday.weekday() == 5:
+        yesterday = today - timedelta(days=2)
+    elif yesterday.weekday() == 6:
+        yesterday = today - timedelta(days=3)
+    return yesterday.strftime("%Y%m%d")
+
+def update_krx_master_data():
+    """백그라운드에서 KRX 전체 종목을 가져와 캐시에 저장"""
+    global cached_krx_master
+    basDd = get_recent_biz_day()
+    
+    headers = {
+        "Authorization": "Bearer " + KRX_AUTH_KEY,
+        "Content-Type": "application/json"
+    }
+    
+    try:
+        res = requests.get(KRX_API_URL, headers=headers, params={"basDd": basDd}, verify=False, timeout=8)
+        if res.status_code != 200 or "OutBlock_1" not in res.text:
+            res = requests.post(KRX_API_URL, headers=headers, json={"basDd": basDd}, verify=False, timeout=8)
+            
+        out_block = res.json().get("OutBlock_1", [])
+        new_master = []
+        for item in out_block:
+            code_str = item.get("ISU_CD", "")
+            name = item.get("ISU_NM", "")
+            mkt = item.get("MKT_NM", "")
+            short_code = code_str[3:9] if code_str.startswith("KR7") else code_str[:6]
+            suffix = ".KQ" if "KOSDAQ" in mkt or "코스닥" in mkt else ".KS"
+            new_master.append({
+                "code": short_code,
+                "ticker": short_code + suffix,
+                "name": name
+            })
+            
+        if new_master:
+            cached_krx_master = new_master
+            print("✅ KRX 종목 마스터 업데이트 완료! 총 {0}개 (기준일: {1})".format(len(new_master), basDd))
+        else:
+            print("⚠️ KRX 응답은 왔지만 종목 데이터가 비어있음. 내장 사전으로 대체.")
+            cached_krx_master = BUILTIN_KR_STOCKS
+    except Exception as e:
+        print("⚠️ KRX 마스터 데이터 갱신 실패 (내장 사전 사용): " + str(e))
+        # ✅ 핵심 수정: KRX 실패 시 내장 사전으로 즉시 폴백
+        if not cached_krx_master:
+            cached_krx_master = BUILTIN_KR_STOCKS
+
+# ✅ 핵심 수정: 앱 시작 시 백그라운드 스레드로 KRX 데이터 미리 로드
+threading.Thread(target=update_krx_master_data, daemon=True).start()
+
 @app.route('/api/search_ticker')
 def search_ticker():
+    # ✅ 핵심 수정: .lower() 제거 — 한글은 대소문자 개념 없어서 lower()가 오히려 방해됨
     query = request.args.get('q', '').strip()
     if not query:
         return jsonify({"quotes": []})
-        
+    
+    query_lower = query.lower()  # 영문 티커 검색용으로만 따로 관리
     quotes = []
     
-    # 💡 브라우저 완벽 위장 (Render 서버 IP 차단 100% 회피용)
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
-        'Referer': 'https://finance.naver.com/',
-        'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7'
-    }
-
-    # 1단계: 네이버 금융 실시간 자동완성 API (위장 헤더 장착 완료)
-    try:
-        naver_url = "https://ac.finance.naver.com/ac"
-        naver_params = {
-            'q': query, 'q_enc': 'utf-8', 'st': '111', 'r_format': 'json', 'r_enc': 'utf-8'
-        }
-        naver_res = requests.get(naver_url, params=naver_params, headers=headers, timeout=3)
-        naver_data = naver_res.json()
+    # 1단계: KRX 캐시(또는 내장 사전)에서 한글 이름 검색
+    # ✅ 핵심 수정: 한글은 원본 query로, 영문/숫자는 query_lower로 비교
+    search_pool = cached_krx_master if cached_krx_master else BUILTIN_KR_STOCKS
+    for stock in search_pool:
+        name_match = query in stock["name"]              # 한글 그대로 비교
+        code_match = query_lower in stock["code"]        # 숫자 코드 비교
+        ticker_match = query_lower in stock["ticker"].lower()  # 야후 티커 비교
         
-        if 'items' in naver_data and len(naver_data['items']) > 0:
-            for item in naver_data['items'][0]:
-                if len(item) >= 2:
-                    name = item[0]
-                    code = item[1]
-                    market = item[2] if len(item) > 2 else ""
-                    # 코스닥이면 .KQ, 그 외엔 .KS 붙여주기
-                    suffix = ".KQ" if "KOSDAQ" in market else ".KS"
-                    
-                    quotes.append({
-                        "shortname": name,
-                        "longname": name,
-                        "symbol": code + suffix,
-                        "exchange": "KOR"
-                    })
-    except Exception as e:
-        print("네이버 API 통신 에러:", str(e))
-
-    # 2단계: API가 튕기면, 무식하지만 100% 확실한 네이버 통합검색 화면 통째로 뜯어오기! (정규식 크롤링)
-    if not quotes:
-        try:
-            encoded_query = urllib.parse.quote(query)
-            search_url = "https://finance.naver.com/search/searchList.naver?query=" + encoded_query
-            search_res = requests.get(search_url, headers=headers, timeout=3)
-            
-            # HTML 안에서 '<a href="/item/main.naver?code=005380">현대차</a>' 이 규칙만 찾아내서 6자리 빼오기
-            pattern = re.compile(r'href="/item/main\.naver\?code=(\d{6})"[^>]*>([^<]+)</a>')
-            matches = pattern.findall(search_res.text)
-            
-            seen_codes = set()
-            for code, name in matches:
-                name = name.strip()
-                if code not in seen_codes:
-                    seen_codes.add(code)
-                    quotes.append({
-                        "shortname": name,
-                        "longname": name,
-                        "symbol": code + ".KS",  # 웹 화면에선 시장 구분이 안 되므로 .KS를 기본값으로 부여
-                        "exchange": "KOR"
-                    })
-                if len(quotes) >= 15:
-                    break
-        except Exception as e:
-            print("네이버 웹 스크래핑 에러:", str(e))
-
-    # 3단계: 못 찾았거나 영어(AAPL 등) 검색어일 때 야후로 넘기기
-    if not quotes or query.isascii():
+        if name_match or code_match or ticker_match:
+            quotes.append({
+                "shortname": stock["name"],
+                "longname": stock["name"],
+                "symbol": stock["ticker"],
+                "exchange": "KOR"
+            })
+        if len(quotes) >= 15:
+            break
+    
+    # 2단계: 영문/숫자 검색어이거나 KRX에서 못 찾은 경우 야후 fallback
+    # ✅ 핵심 수정: 한글 검색어일 때는 야후로 넘기지 않음 (야후는 한글 인식 못함)
+    if query_lower.isascii() or not quotes:
         try:
             yahoo_url = "https://query2.finance.yahoo.com/v1/finance/search"
             yahoo_params = {'q': query, 'quotesCount': 10, 'newsCount': 0}
-            yahoo_res = requests.get(yahoo_url, params=yahoo_params, headers={'User-Agent': 'Mozilla/5.0'}, timeout=3)
+            yahoo_res = requests.get(
+                yahoo_url, params=yahoo_params,
+                headers={'User-Agent': 'Mozilla/5.0'}, timeout=3
+            )
             yahoo_data = yahoo_res.json()
             
+            existing_symbols = {x['symbol'] for x in quotes}
             if 'quotes' in yahoo_data:
                 for q in yahoo_data['quotes']:
-                    # 중복되지 않는 것만 리스트에 넣기
-                    if q.get('symbol') not in [x['symbol'] for x in quotes]:
+                    if q.get('symbol') not in existing_symbols:
                         quotes.append(q)
         except Exception as e:
             print("Yahoo API 검색 에러:", str(e))
@@ -193,4 +274,5 @@ def search_ticker():
     return jsonify({"quotes": quotes})
 
 if __name__ == '__main__':
+    # KRX 데이터는 위에서 이미 백그라운드 스레드로 시작됨
     app.run(debug=True, port=5000)
