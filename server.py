@@ -12,7 +12,7 @@ warnings.filterwarnings('ignore', message='Unverified HTTPS request')
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
-# --- (기존 DIVIDEND_STOCKS 및 get_all_stocks, get_single_stock 로직은 유지) ---
+# 기본 TOP 리스트 (유지)
 DIVIDEND_STOCKS = [
     { "category": "kr-stock", "ticker": "005935.KS", "isUS": False, "period": "분기배당", "months": "3, 6, 9, 12월", "name": "삼성전자우 (005935)", "rate": 0.92, "desc": "국민 주식 삼성전자의 배당 우선 우선주, 국내 대표 분기 배당주" },
     { "category": "kr-stock", "ticker": "055550.KS", "isUS": False, "period": "분기배당", "months": "2, 4, 7, 11월", "name": "신한지주 (055550)", "rate": 2.78, "desc": "국내 금융지주사 중 최초로 분기 배당을 정착시킨 대표적인 고배당 은행주" },
@@ -82,7 +82,6 @@ def get_single_stock():
             rate_fallback = info.get('dividendYield', 0) or info.get('trailingAnnualDividendYield', 0)
             rate_percent = round(rate_fallback * 100, 2) if rate_fallback else 0.0
         
-        # 8214% 같은 야후 오류 방어
         if rate_percent > 50.0: rate_percent = 0.0 
         
         short_name = info.get('shortName', symbol)
@@ -101,61 +100,61 @@ def get_single_stock():
         return jsonify({"error": "종목을 찾을 수 없거나 실패했습니다: {0}".format(str(e))}), 500
     
 # =========================================================================
-# 🚨 새봄이가 뚫어온 한국거래소(KRX) API 연동 마스터 데이터 로직 🚨
+# 🚨 KRX 공식 API - 휴일/시차 방어형 완전판 🚨
 # =========================================================================
 KRX_API_URL = "https://data-dbg.krx.co.kr/svc/apis/sto/stk_bydd_trd"
 KRX_AUTH_KEY = "F27E4E2DC4564CD6980AC9310636425A392217F9"
 cached_krx_master = []
 
-def get_recent_biz_day():
-    """KRX 데이터가 존재하는 가장 최근 영업일(평일)을 안전하게 계산"""
-    today = datetime.now()
-    yesterday = today - timedelta(days=1)
-    if yesterday.weekday() == 5: # 토요일이면 목/금요일로
-        yesterday = today - timedelta(days=2)
-    elif yesterday.weekday() == 6: # 일요일이면 금요일로
-        yesterday = today - timedelta(days=3)
-    return yesterday.strftime("%Y%m%d")
-
 def update_krx_master_data():
-    """서버 최초 구동 시 KRX 전체 종목을 1번만 싹 가져와서 저장해두는 함수"""
     global cached_krx_master
-    basDd = get_recent_biz_day()
     
+    # 올바른 KRX API 헤더 사용 (Bearer 아님!)
     headers = {
-        "Authorization": "Bearer " + KRX_AUTH_KEY,
+        "AUTH_KEY": KRX_AUTH_KEY,
         "Content-Type": "application/json"
     }
     
-    try:
-        # 공공 API 명세(InBlock_1)에 맞게 GET 파라미터 또는 POST JSON으로 시도
-        res = requests.get(KRX_API_URL, headers=headers, params={"basDd": basDd}, verify=False, timeout=5)
-        if res.status_code != 200 or "OutBlock_1" not in res.text:
-            res = requests.post(KRX_API_URL, headers=headers, json={"basDd": basDd}, verify=False, timeout=5)
+    today = datetime.now()
+    success = False
+    
+    # 휴일, 주말, UTC 시차를 무시하기 위해 최대 15일 전까지 데이터가 나올 때까지 거꾸로 탐색!
+    for i in range(1, 15):
+        test_date = (today - timedelta(days=i)).strftime("%Y%m%d")
+        try:
+            res = requests.get(KRX_API_URL, headers=headers, params={"basDd": test_date}, verify=False, timeout=5)
             
-        out_block = res.json().get("OutBlock_1", [])
-        new_master = []
-        for item in out_block:
-            code_str = item.get("ISU_CD", "")
-            name = item.get("ISU_NM", "")
-            mkt = item.get("MKT_NM", "")
+            # 파이썬 3.4 호환 방식 JSON 파싱
+            data = res.json()
+            out_block = data.get("OutBlock_1", [])
             
-            # KR7005930003 같은 12자리 표준코드에서 6자리 단축코드만 쏙 빼기
-            short_code = code_str[3:9] if code_str.startswith("KR7") else code_str[:6]
-            # 코스닥/코스피 야후 티커용 접미사 부여
-            suffix = ".KQ" if "KOSDAQ" in mkt or "코스닥" in mkt else ".KS"
+            # 만약 데이터가 들어있다면 (영업일 매매정보가 존재한다면)
+            if out_block and len(out_block) > 0:
+                new_master = []
+                for item in out_block:
+                    code_str = item.get("ISU_CD", "")
+                    name = item.get("ISU_NM", "")
+                    mkt = item.get("MKT_NM", "")
+                    
+                    short_code = code_str[3:9] if code_str.startswith("KR7") else code_str[:6]
+                    suffix = ".KQ" if "KOSDAQ" in mkt or "코스닥" in mkt else ".KS"
+                    
+                    new_master.append({
+                        "code": short_code,
+                        "ticker": short_code + suffix,
+                        "name": name
+                    })
+                    
+                cached_krx_master = new_master
+                success = True
+                print("KRX 마스터 업데이트 성공! (기준일: {0}, 총 {1}개 종목)".format(test_date, len(new_master)))
+                break # 데이터 찾았으니 탐색 끝!
+                
+        except Exception as e:
+            continue # 실패하면 그냥 전날로 넘어가서 다시 시도
             
-            new_master.append({
-                "code": short_code,
-                "ticker": short_code + suffix,
-                "name": name
-            })
-            
-        if new_master:
-            cached_krx_master = new_master
-            print("KRX 종목 마스터 업데이트 완료! 총 {0}개 (기준일: {1})".format(len(new_master), basDd))
-    except Exception as e:
-        print("KRX 마스터 데이터 갱신 실패:", str(e))
+    if not success:
+        print("KRX 마스터 데이터 갱신 실패: 최근 15일 내에 영업일 데이터를 찾을 수 없습니다.")
 
 @app.route('/api/search_ticker')
 def search_ticker():
@@ -165,24 +164,24 @@ def search_ticker():
         
     quotes = []
     
-    # 💡 1단계: 서버 메모리에 KRX 리스트가 없으면 최초 1회 다운로드!
+    # 1. 서버 메모리에 KRX 리스트가 없으면 다운로드 시도
     if not cached_krx_master:
         update_krx_master_data()
         
-    # 💡 2단계: 네이버 안 거치고, 서버 메모리에서 빛의 속도로 초성/한글 검색!
-    for stock in cached_krx_master:
-        # 검색어가 이름이나 6자리 코드에 포함되어 있으면 매칭
-        if query in stock["name"].lower() or query in stock["code"]:
-            quotes.append({
-                "shortname": stock["name"],
-                "longname": stock["name"],
-                "symbol": stock["ticker"],
-                "exchange": "KOR"
-            })
-        if len(quotes) >= 15: # 너무 많이 나오면 렉 걸리니 15개 컷
-            break
+    # 2. 서버 메모리에서 한글/초성/코드 폭풍 검색!
+    if cached_krx_master:
+        for stock in cached_krx_master:
+            if query in stock["name"].lower() or query in stock["code"]:
+                quotes.append({
+                    "shortname": stock["name"],
+                    "longname": stock["name"],
+                    "symbol": stock["ticker"],
+                    "exchange": "KOR"
+                })
+            if len(quotes) >= 15:
+                break
             
-    # 💡 3단계: 국내 주식이 아니거나(예: AAPL 검색), 못 찾았으면 글로벌 야후 API로 우회 검색!
+    # 3. 못 찾았거나 영어(AAPL 등)면 야후 API로 우회 검색!
     if not quotes or query.isascii():
         try:
             yahoo_url = "https://query2.finance.yahoo.com/v1/finance/search"
