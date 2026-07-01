@@ -240,6 +240,18 @@ BUILTIN_KR_STOCKS = [
     {"code": "034725", "ticker": "034725.KS", "name": "SK우"},
     {"code": "096775", "ticker": "096775.KS", "name": "SK이노베이션우"},
     {"code": "051915", "ticker": "051915.KS", "name": "LG화학우"},
+    {"code": "446720", "ticker": "446720.KS", "name": "SOL 미국배당다우존스"},
+    {"code": "458730", "ticker": "458730.KS", "name": "TIGER 미국배당다우존스"},
+    {"code": "461250", "ticker": "461250.KS", "name": "ACE 미국배당다우존스"},
+    {"code": "360200", "ticker": "360200.KS", "name": "TIGER 미국배당+3%프리미엄다우존스"},
+    {"code": "458760", "ticker": "458760.KS", "name": "TIGER 미국배당+7%프리미엄다우존스"},
+    {"code": "447770", "ticker": "447770.KS", "name": "KODEX 미국배당커버드콜액티브"},
+    {"code": "476080", "ticker": "476080.KS", "name": "TIME Korea플러스배당액티브"},
+    {"code": "161510", "ticker": "161510.KS", "name": "PLUS 고배당주"},
+    {"code": "479620", "ticker": "479620.KS", "name": "KODEX 200타겟위클리커버드콜"},
+    {"code": "474220", "ticker": "474220.KS", "name": "SOL 코리아고배당"},
+    {"code": "379800", "ticker": "379800.KS", "name": "KODEX 미국S&P500TR"},
+    {"code": "379810", "ticker": "379810.KS", "name": "KODEX 미국나스닥100TR"},
 ]
 
 def get_recent_biz_day():
