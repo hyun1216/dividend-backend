@@ -6,6 +6,8 @@ from datetime import datetime, timedelta
 import requests
 import threading
 import warnings
+import os
+import pymysql  # 🚀 DB 연결을 위해 새로 추가된 녀석!
 
 # SSL 인증서 경고 숨기기
 warnings.filterwarnings('ignore', message='Unverified HTTPS request')
@@ -13,7 +15,24 @@ warnings.filterwarnings('ignore', message='Unverified HTTPS request')
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
-# --- (기존 DIVIDEND_STOCKS 및 get_all_stocks, get_single_stock 로직은 유지) ---
+# =========================================================================
+# 🗄️ DB 접속 설정 (환경 변수 적용 완료!)
+# =========================================================================
+db_config = {
+    'host': os.environ.get('DB_HOST', 'localhost'),
+    'user': os.environ.get('DB_USER', 'dividend'),
+    'password': os.environ.get('DB_PASSWORD'), 
+    'database': os.environ.get('DB_NAME', 'dividend'),
+    'charset': 'utf8mb4',
+    'cursorclass': pymysql.cursors.DictCursor
+}
+
+def get_db_connection():
+    return pymysql.connect(**db_config)
+
+# =========================================================================
+# 📈 주식 데이터 및 계산기 로직
+# =========================================================================
 DIVIDEND_STOCKS = [
     { "category": "kr-stock", "ticker": "005935.KS", "isUS": False, "period": "분기배당", "months": "3, 6, 9, 12월", "name": "삼성전자우 (005935)", "rate": 0.92, "desc": "국민 주식 삼성전자의 배당 우선 우선주, 국내 대표 분기 배당주" },
     { "category": "kr-stock", "ticker": "055550.KS", "isUS": False, "period": "분기배당", "months": "2, 4, 7, 11월", "name": "신한지주 (055550)", "rate": 2.78, "desc": "국내 금융지주사 중 최초로 분기 배당을 정착시킨 대표적인 고배당 은행주" },
@@ -83,7 +102,6 @@ def get_single_stock():
             rate_fallback = info.get('dividendYield', 0) or info.get('trailingAnnualDividendYield', 0)
             rate_percent = round(rate_fallback * 100, 2) if rate_fallback else 0.0
         
-        # 8214% 같은 야후 오류 방어
         if rate_percent > 50.0: rate_percent = 0.0 
         
         short_name = info.get('shortName', symbol)
@@ -100,16 +118,72 @@ def get_single_stock():
         return jsonify(stock_data)
     except Exception as e:
         return jsonify({"error": "종목을 찾을 수 없거나 실패했습니다: {0}".format(str(e))}), 500
-    
+
 # =========================================================================
-# 🚨 KRX API 연동 마스터 데이터 로직 (한글 검색 버그 수정판) 🚨
+# 📝 배당금 인증 게시판 API 로직 
+# =========================================================================
+
+@app.route('/api/posts', methods=['GET'])
+def get_posts():
+    """게시글 목록 불러오기"""
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            # 글을 최신순으로 가져옴
+            cursor.execute("SELECT id, nickname, title, content, image_url, likes, created_at FROM board ORDER BY created_at DESC")
+            posts = cursor.fetchall()
+            return jsonify(posts)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if 'conn' in locals() and conn.open:
+            conn.close()
+
+@app.route('/api/posts', methods=['POST'])
+def add_post():
+    """새 게시글 작성하기"""
+    data = request.json
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            sql = "INSERT INTO board (nickname, password, title, content, image_url) VALUES (%s, %s, %s, %s, %s)"
+            cursor.execute(sql, (
+                data.get('nickname'), 
+                data.get('password'), 
+                data.get('title'), 
+                data.get('content'), 
+                data.get('image_url')
+            ))
+            conn.commit()
+            return jsonify({"status": "success"}), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if 'conn' in locals() and conn.open:
+            conn.close()
+
+@app.route('/api/posts/<int:post_id>/like', methods=['POST'])
+def like_post(post_id):
+    """게시글 좋아요 누르기"""
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute("UPDATE board SET likes = likes + 1 WHERE id = %s", (post_id,))
+            conn.commit()
+            return jsonify({"status": "success"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if 'conn' in locals() and conn.open:
+            conn.close()
+
+# =========================================================================
+# 🚨 KRX API 연동 마스터 데이터 로직
 # =========================================================================
 KRX_API_URL = "https://data-dbg.krx.co.kr/svc/apis/sto/stk_bydd_trd"
 KRX_AUTH_KEY = "F27E4E2DC4564CD6980AC9310636425A392217F9"
 cached_krx_master = []
 
-# ✅ DIVIDEND_STOCKS 기반 내장 검색 사전 (KRX API 실패 시 최소 보장용)
-# 한글 이름 → 야후 티커 매핑
 BUILTIN_KR_STOCKS = [
     {"code": "005930", "ticker": "005930.KS", "name": "삼성전자"},
     {"code": "005935", "ticker": "005935.KS", "name": "삼성전자우"},
@@ -161,7 +235,6 @@ BUILTIN_KR_STOCKS = [
     {"code": "000720", "ticker": "000720.KS", "name": "현대건설"},
     {"code": "011780", "ticker": "011780.KS", "name": "금호석유"},
     {"code": "071050", "ticker": "071050.KS", "name": "한국금융지주"},
-    # 자주 검색되는 우선주
     {"code": "000815", "ticker": "000815.KS", "name": "삼성화재우"},
     {"code": "009155", "ticker": "009155.KS", "name": "삼성전기우"},
     {"code": "034725", "ticker": "034725.KS", "name": "SK우"},
@@ -170,7 +243,6 @@ BUILTIN_KR_STOCKS = [
 ]
 
 def get_recent_biz_day():
-    """KRX 데이터가 존재하는 가장 최근 영업일(평일)을 안전하게 계산"""
     today = datetime.now()
     yesterday = today - timedelta(days=1)
     if yesterday.weekday() == 5:
@@ -180,7 +252,6 @@ def get_recent_biz_day():
     return yesterday.strftime("%Y%m%d")
 
 def update_krx_master_data():
-    """백그라운드에서 KRX 전체 종목을 가져와 캐시에 저장"""
     global cached_krx_master
     basDd = get_recent_biz_day()
     
@@ -216,30 +287,25 @@ def update_krx_master_data():
             cached_krx_master = BUILTIN_KR_STOCKS
     except Exception as e:
         print("⚠️ KRX 마스터 데이터 갱신 실패 (내장 사전 사용): " + str(e))
-        # ✅ 핵심 수정: KRX 실패 시 내장 사전으로 즉시 폴백
         if not cached_krx_master:
             cached_krx_master = BUILTIN_KR_STOCKS
 
-# ✅ 핵심 수정: 앱 시작 시 백그라운드 스레드로 KRX 데이터 미리 로드
 threading.Thread(target=update_krx_master_data, daemon=True).start()
 
 @app.route('/api/search_ticker')
 def search_ticker():
-    # ✅ 핵심 수정: .lower() 제거 — 한글은 대소문자 개념 없어서 lower()가 오히려 방해됨
     query = request.args.get('q', '').strip()
     if not query:
         return jsonify({"quotes": []})
     
-    query_lower = query.lower()  # 영문 티커 검색용으로만 따로 관리
+    query_lower = query.lower() 
     quotes = []
     
-    # 1단계: KRX 캐시(또는 내장 사전)에서 한글 이름 검색
-    # ✅ 핵심 수정: 한글은 원본 query로, 영문/숫자는 query_lower로 비교
     search_pool = cached_krx_master if cached_krx_master else BUILTIN_KR_STOCKS
     for stock in search_pool:
-        name_match = query in stock["name"]              # 한글 그대로 비교
-        code_match = query_lower in stock["code"]        # 숫자 코드 비교
-        ticker_match = query_lower in stock["ticker"].lower()  # 야후 티커 비교
+        name_match = query in stock["name"]              
+        code_match = query_lower in stock["code"]        
+        ticker_match = query_lower in stock["ticker"].lower()  
         
         if name_match or code_match or ticker_match:
             quotes.append({
@@ -251,8 +317,6 @@ def search_ticker():
         if len(quotes) >= 15:
             break
     
-    # 2단계: 영문/숫자 검색어이거나 KRX에서 못 찾은 경우 야후 fallback
-    # ✅ 핵심 수정: 한글 검색어일 때는 야후로 넘기지 않음 (야후는 한글 인식 못함)
     if query_lower.isascii() or not quotes:
         try:
             yahoo_url = "https://query2.finance.yahoo.com/v1/finance/search"
@@ -274,5 +338,4 @@ def search_ticker():
     return jsonify({"quotes": quotes})
 
 if __name__ == '__main__':
-    # KRX 데이터는 위에서 이미 백그라운드 스레드로 시작됨
     app.run(debug=True, port=5000)
