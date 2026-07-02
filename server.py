@@ -1,5 +1,6 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, render_template, send_from_directory
 from flask_cors import CORS
+from werkzeug.security import generate_password_hash
 import yfinance as yf
 import time
 from datetime import datetime, timedelta
@@ -14,6 +15,14 @@ warnings.filterwarnings('ignore', message='Unverified HTTPS request')
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
+
+@app.route('/')
+def calculator_page():
+    return send_from_directory(app.root_path, '게시판_index.html')
+
+@app.route('/board')
+def board_page():
+    return render_template('게시판_board.html')
 
 # =========================================================================
 # 🗄️ DB 접속 설정 (환경 변수 적용 완료!)
@@ -130,7 +139,18 @@ def get_posts():
         conn = get_db_connection()
         with conn.cursor() as cursor:
             # 글을 최신순으로 가져옴
-            cursor.execute("SELECT id, nickname, title, content, image_url, likes, created_at FROM board ORDER BY created_at DESC")
+            cursor.execute("""
+                SELECT
+                    id,
+                    nickname,
+                    title,
+                    content,
+                    image_url,
+                    likes,
+                    DATE_FORMAT(created_at, '%Y-%m-%d %H:%i') AS created_at
+                FROM board
+                ORDER BY created_at DESC
+            """)
             posts = cursor.fetchall()
             return jsonify(posts)
     except Exception as e:
@@ -142,17 +162,35 @@ def get_posts():
 @app.route('/api/posts', methods=['POST'])
 def add_post():
     """새 게시글 작성하기"""
-    data = request.json
+    data = request.get_json(silent=True) or {}
+    nickname = (data.get('nickname') or '').strip()
+    password = (data.get('password') or '').strip()
+    title = (data.get('title') or '').strip()
+    content = (data.get('content') or '').strip()
+    image_url = (data.get('image_url') or '').strip()
+
+    if not nickname or not password or not title or not content:
+        return jsonify({"error": "닉네임, 비밀번호, 제목, 내용을 모두 입력해 주세요."}), 400
+
+    if len(nickname) > 40:
+        return jsonify({"error": "닉네임은 40자 이하로 입력해 주세요."}), 400
+
+    if len(title) > 120:
+        return jsonify({"error": "제목은 120자 이하로 입력해 주세요."}), 400
+
+    if image_url and not image_url.startswith(("http://", "https://")):
+        return jsonify({"error": "이미지 URL은 http:// 또는 https://로 시작해야 합니다."}), 400
+
     try:
         conn = get_db_connection()
         with conn.cursor() as cursor:
             sql = "INSERT INTO board (nickname, password, title, content, image_url) VALUES (%s, %s, %s, %s, %s)"
             cursor.execute(sql, (
-                data.get('nickname'), 
-                data.get('password'), 
-                data.get('title'), 
-                data.get('content'), 
-                data.get('image_url')
+                nickname,
+                generate_password_hash(password),
+                title,
+                content,
+                image_url or None
             ))
             conn.commit()
             return jsonify({"status": "success"}), 201
@@ -169,8 +207,12 @@ def like_post(post_id):
         conn = get_db_connection()
         with conn.cursor() as cursor:
             cursor.execute("UPDATE board SET likes = likes + 1 WHERE id = %s", (post_id,))
+            if cursor.rowcount == 0:
+                return jsonify({"error": "게시글을 찾을 수 없습니다."}), 404
+            cursor.execute("SELECT likes FROM board WHERE id = %s", (post_id,))
+            updated_post = cursor.fetchone()
             conn.commit()
-            return jsonify({"status": "success"})
+            return jsonify({"status": "success", "likes": updated_post["likes"]})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     finally:
