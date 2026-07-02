@@ -1,6 +1,6 @@
 from flask import Flask, jsonify, request, render_template, send_from_directory
 from flask_cors import CORS
-from werkzeug.security import generate_password_hash
+from werkzeug.security import check_password_hash, generate_password_hash
 import yfinance as yf
 import time
 from datetime import datetime, timedelta
@@ -25,8 +25,7 @@ def calculator_page():
 
 @app.route('/board')
 def board_page():
-    # board 폴더 안에 있는 index.html을 찾아가도록 수정!
-    return send_from_directory(os.path.join(app.root_path, 'board'), 'index.html')
+    return render_template('수정본_index.html')
 
 # =========================================================================
 # 🗄️ DB 접속 설정 (포트 환경변수 추가 완료)
@@ -36,13 +35,26 @@ db_config = {
     'user': os.environ.get('DB_USER', 'dividend'),
     'password': os.environ.get('DB_PASSWORD'), 
     'database': os.environ.get('DB_NAME', 'dividend'),
-    'port': int(os.environ.get('DB_PORT', 3306)),  # 🚀 클라우드 DB용 전용 포트 추가!
+    'port': int(os.environ.get('DB_PORT', 3306)),
     'charset': 'utf8mb4',
-    'cursorclass': pymysql.cursors.DictCursor
+    'cursorclass': pymysql.cursors.DictCursor,
+    'ssl': {'ca': None}  # 👈 이 옵션을 추가하면 SSL 요구사항을 맞춰서 연결해!
 }
 
 def get_db_connection():
     return pymysql.connect(**db_config)
+
+def is_post_password_match(stored_password, input_password):
+    if not stored_password or not input_password:
+        return False
+
+    try:
+        if check_password_hash(stored_password, input_password):
+            return True
+    except ValueError:
+        pass
+
+    return stored_password == input_password
 
 # =========================================================================
 # 📈 주식 데이터 및 계산기 로직
@@ -217,6 +229,36 @@ def like_post(post_id):
             updated_post = cursor.fetchone()
             conn.commit()
             return jsonify({"status": "success", "likes": updated_post["likes"]})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if 'conn' in locals() and conn.open:
+            conn.close()
+
+@app.route('/api/posts/<int:post_id>', methods=['DELETE'])
+def delete_post(post_id):
+    """작성 비밀번호 확인 후 게시글 삭제하기"""
+    data = request.get_json(silent=True) or {}
+    password = (data.get('password') or '').strip()
+
+    if not password:
+        return jsonify({"error": "삭제하려면 작성 비밀번호를 입력해 주세요."}), 400
+
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT id, password FROM board WHERE id = %s", (post_id,))
+            post = cursor.fetchone()
+
+            if not post:
+                return jsonify({"error": "게시글을 찾을 수 없습니다."}), 404
+
+            if not is_post_password_match(post["password"], password):
+                return jsonify({"error": "비밀번호가 일치하지 않습니다."}), 403
+
+            cursor.execute("DELETE FROM board WHERE id = %s", (post_id,))
+            conn.commit()
+            return jsonify({"status": "success"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     finally:
