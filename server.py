@@ -8,7 +8,7 @@ import requests
 import threading
 import warnings
 import os
-import pymysql  # 🚀 DB 연결을 위해 새로 추가된 녀석!
+import pymysql
 
 # SSL 인증서 경고 숨기기
 warnings.filterwarnings('ignore', message='Unverified HTTPS request')
@@ -16,22 +16,27 @@ warnings.filterwarnings('ignore', message='Unverified HTTPS request')
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
+# =========================================================================
+# 🌐 화면 라우팅 (폴더 및 파일명 변경 반영 완료)
+# =========================================================================
 @app.route('/')
 def calculator_page():
-    return send_from_directory(app.root_path, '게시판_index.html')
+    return send_from_directory(app.root_path, 'index.html')
 
 @app.route('/board')
 def board_page():
-    return render_template('게시판_board.html')
+    # board 폴더 안에 있는 index.html을 찾아가도록 수정!
+    return send_from_directory(os.path.join(app.root_path, 'board'), 'index.html')
 
 # =========================================================================
-# 🗄️ DB 접속 설정 (환경 변수 적용 완료!)
+# 🗄️ DB 접속 설정 (포트 환경변수 추가 완료)
 # =========================================================================
 db_config = {
     'host': os.environ.get('DB_HOST', 'localhost'),
     'user': os.environ.get('DB_USER', 'dividend'),
     'password': os.environ.get('DB_PASSWORD'), 
     'database': os.environ.get('DB_NAME', 'dividend'),
+    'port': int(os.environ.get('DB_PORT', 3306)),  # 🚀 클라우드 DB용 전용 포트 추가!
     'charset': 'utf8mb4',
     'cursorclass': pymysql.cursors.DictCursor
 }
@@ -57,7 +62,7 @@ DIVIDEND_STOCKS = [
     { "category": "us-etf", "ticker": "SCHD", "isUS": True, "period": "분기배당", "months": "3, 6, 9, 12월", "name": "SCHD (Schwab US Dividend Equity ETF)", "rate": 3.3, "desc": "안정적인 배당 성장의 교과서, 미국 우량 배당주 모음" },
     { "category": "us-etf", "ticker": "JEPI", "isUS": True, "period": "월배당", "months": "매달", "name": "JEPI (JP모건 초고배당 ETF)", "rate": 8.43, "desc": "주가 상승보단 압도적인 월 배당 현금 흐름에 집중하는 ETF" },
     { "category": "us-etf", "ticker": "QQQI", "isUS": True, "period": "월배당", "months": "매달", "name": "QQQI", "rate": 7.57, "desc": "나스닥 100에 커버드콜 전략으로 투자하는 ETF" },
-    { "category": "us-etf", "ticker": "SPYI", "isUS": True, "period": "월배당", "months": "매달", "name": "SPYI", "rate": 11.65, "desc": "S&P 500 지수 옵션 선물 전략을 사용하는 양방향 투자 월배당 ETF" },
+    { "category": "us-etf", "ticker": "SPYI", "isUS": True, "period": "월배당", "months": "매달", "name": "SPYI", "rate": 11.65, "desc": "S&P 500 지수 옵션 선물 전략을 활용하는 양방향 투자 월배당 ETF" },
     { "category": "us-etf", "ticker": "TLTW", "isUS": True, "period": "월배당", "months": "매달", "name": "TLTW (미국 장기채 커버드콜 ETF)", "rate": 14.2, "desc": "미국 20년 국채 투자와 콜옵션 매도를 결합해 초고배당을 주는 월배당 ETF" },
     { "category": "us-etf", "ticker": "DIVO", "isUS": True, "period": "월배당", "months": "매달", "name": "Divo (앰플리파이 배당 수익 ETF)", "rate": 6.45, "desc": "미국 우량 대형주 투자와 전술적 커버드콜 옵션 매도를 활용하는 월배당 ETF" }
 ]
@@ -138,7 +143,6 @@ def get_posts():
     try:
         conn = get_db_connection()
         with conn.cursor() as cursor:
-            # 글을 최신순으로 가져옴
             cursor.execute("""
                 SELECT
                     id,
@@ -340,7 +344,7 @@ def update_krx_master_data():
             print("⚠️ KRX 응답은 왔지만 종목 데이터가 비어있음. 내장 사전으로 대체.")
             cached_krx_master = BUILTIN_KR_STOCKS
     except Exception as e:
-        print("⚠️ KRX 마스터 데이터 갱신 실패 (내장 사전 사용): " + str(e))
+        print("⚠️ KRX 마스터 데이터 갱신 실패 (내장 사전 연결): " + str(e))
         if not cached_krx_master:
             cached_krx_master = BUILTIN_KR_STOCKS
 
@@ -390,6 +394,32 @@ def search_ticker():
             print("Yahoo API 검색 에러:", str(e))
 
     return jsonify({"quotes": quotes})
+
+# =========================================================================
+# 🛠️ 테이블 자동 생성 API (최초 1회 셋업용)
+# =========================================================================
+@app.route('/api/init_db')
+def init_db():
+    """최초 1회 실행: DB에 게시판 테이블을 생성합니다."""
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS board (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    nickname VARCHAR(40) NOT NULL,
+                    password VARCHAR(255) NOT NULL,
+                    title VARCHAR(120) NOT NULL,
+                    content TEXT NOT NULL,
+                    image_url VARCHAR(255),
+                    likes INT DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.commit()
+        return jsonify({"message": "✅ 게시판 테이블 세팅이 완벽하게 끝났습니다! 이제 게시판을 맘껏 즐겨보세요."})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
