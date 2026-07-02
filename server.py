@@ -25,7 +25,8 @@ def calculator_page():
 
 @app.route('/board')
 def board_page():
-    return render_template('수정본_index.html')
+    # board 폴더 안에 있는 index.html을 찾아가도록 수정!
+    return send_from_directory(os.path.join(app.root_path, 'board'), 'index.html')
 
 # =========================================================================
 # 🗄️ DB 접속 설정 (포트 환경변수 추가 완료)
