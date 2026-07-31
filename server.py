@@ -23,7 +23,7 @@ CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 # =========================================================================
 @app.route('/')
 def calculator_page():
-    return send_from_directory(app.root_path, 'IDE_index.html')
+    return send_from_directory(app.root_path, 'index.html')
 
 @app.route('/board')
 def board_page():
