@@ -6,3 +6,5 @@ requests
 pymysql
 cloudinary
 PyMySQL
+finance-datareader
+pandas
