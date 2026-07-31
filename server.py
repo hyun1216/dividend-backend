@@ -9,6 +9,8 @@ import threading
 import warnings
 import os
 import pymysql
+import concurrent.futures
+import FinanceDataReader as fdr
 
 # SSL 인증서 경고 숨기기
 warnings.filterwarnings('ignore', message='Unverified HTTPS request')
@@ -21,7 +23,7 @@ CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 # =========================================================================
 @app.route('/')
 def calculator_page():
-    return send_from_directory(app.root_path, 'index.html')
+    return send_from_directory(app.root_path, 'IDE_index.html')
 
 @app.route('/board')
 def board_page():
@@ -86,8 +88,8 @@ CACHE_TTL = 18000
 @app.route('/api/stocks')
 def get_all_stocks():
     current_time = time.time()
-    response_data = []
-    for stock in DIVIDEND_STOCKS:
+    
+    def fetch_stock(stock):
         ticker = stock["ticker"]
         if ticker in cache and (current_time - cache[ticker][0] < CACHE_TTL):
             price = cache[ticker][1].get("price", 0)
@@ -101,7 +103,10 @@ def get_all_stocks():
                 price = 0
         enriched_stock = stock.copy()
         enriched_stock["price"] = price
-        response_data.append(enriched_stock)
+        return enriched_stock
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        response_data = list(executor.map(fetch_stock, DIVIDEND_STOCKS))
         
     update_time_str = datetime.now().strftime("%Y-%m-%d %H:%M")
     return jsonify({"data": response_data, "update_time": update_time_str})
@@ -354,37 +359,26 @@ def get_recent_biz_day():
 
 def update_krx_master_data():
     global cached_krx_master
-    basDd = get_recent_biz_day()
-    
-    headers = {
-        "Authorization": "Bearer " + KRX_AUTH_KEY,
-        "Content-Type": "application/json"
-    }
-    
     try:
-        res = requests.get(KRX_API_URL, headers=headers, params={"basDd": basDd}, verify=False, timeout=8)
-        if res.status_code != 200 or "OutBlock_1" not in res.text:
-            res = requests.post(KRX_API_URL, headers=headers, json={"basDd": basDd}, verify=False, timeout=8)
-            
-        out_block = res.json().get("OutBlock_1", [])
+        # FinanceDataReader를 이용해 KRX 전체 종목 목록 가져오기
+        df_krx = fdr.StockListing('KRX')
         new_master = []
-        for item in out_block:
-            code_str = item.get("ISU_CD", "")
-            name = item.get("ISU_NM", "")
-            mkt = item.get("MKT_NM", "")
-            short_code = code_str[3:9] if code_str.startswith("KR7") else code_str[:6]
-            suffix = ".KQ" if "KOSDAQ" in mkt or "코스닥" in mkt else ".KS"
-            new_master.append({
-                "code": short_code,
-                "ticker": short_code + suffix,
-                "name": name
-            })
-            
+        for _, row in df_krx.iterrows():
+            code = str(row.get('Symbol', row.get('Code', '')))
+            name = str(row.get('Name', ''))
+            market = str(row.get('Market', ''))
+            suffix = ".KQ" if "KOSDAQ" in market else ".KS"
+            if code:
+                new_master.append({
+                    "code": code,
+                    "ticker": code + suffix,
+                    "name": name
+                })
         if new_master:
             cached_krx_master = new_master
-            print("✅ KRX 종목 마스터 업데이트 완료! 총 {0}개 (기준일: {1})".format(len(new_master), basDd))
+            print(f"✅ KRX 종목 마스터 업데이트 완료! 총 {len(new_master)}개 (FinanceDataReader 연동)")
         else:
-            print("⚠️ KRX 응답은 왔지만 종목 데이터가 비어있음. 내장 사전으로 대체.")
+            print("⚠️ 종목 데이터가 비어있음. 내장 사전으로 대체.")
             cached_krx_master = BUILTIN_KR_STOCKS
     except Exception as e:
         print("⚠️ KRX 마스터 데이터 갱신 실패 (내장 사전 연결): " + str(e))
