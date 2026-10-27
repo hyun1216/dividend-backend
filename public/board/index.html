@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>💰</text></svg>">
+    <title>배당금 자랑 게시판</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700;900&display=swap');
+        body { font-family: 'Noto Sans KR', sans-serif; }
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #d6d3d1; border-radius: 4px; }
+        .post-content { white-space: pre-line; overflow-wrap: anywhere; }
+        .break-anywhere { overflow-wrap: anywhere; }
+    </style>
+</head>
+<body class="min-h-screen bg-stone-50 text-stone-800 p-4 sm:p-6 pb-24 relative">
+    <main class="mx-auto flex w-full max-w-4xl flex-col gap-5 sm:gap-6">
+        <header class="rounded-3xl border border-stone-200 bg-white p-5 text-center shadow-xl shadow-stone-200/50 sm:p-8">
+            <span class="inline-flex rounded-full border border-amber-200 bg-amber-100 px-3 py-1 text-xs font-bold uppercase tracking-widest text-amber-700">Dividend Master Board</span>
+            <h1 class="mt-3 text-[1.75rem] font-black leading-tight tracking-tight text-stone-900 sm:text-[2.25rem]">배당금 자랑 게시판</h1>
+            <p class="mx-auto mt-2 max-w-2xl text-sm leading-6 text-stone-500 sm:text-base">배당 입금 캡처와 나만의 월배당 기록을 가볍게 남겨보세요.</p>
+            <nav class="mt-4 flex flex-col items-center justify-center gap-2 text-sm sm:flex-row">
+                <a href="/" class="inline-flex w-full items-center justify-center rounded-xl border border-stone-200 bg-stone-50 px-4 py-2 font-black text-stone-600 shadow-sm transition-all hover:bg-stone-100 sm:w-auto">계산기로 돌아가기</a>
+                <button id="refreshButton" type="button" class="inline-flex w-full items-center justify-center rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 font-black text-amber-700 shadow-sm transition-all hover:bg-amber-100 sm:w-auto">새로고침</button>
+            </nav>
+        </header>
+
+        <section class="min-w-0">
+            <div class="mb-4 flex flex-col gap-2 rounded-2xl border border-stone-200 bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                    <h2 class="text-lg font-black text-stone-900 sm:text-xl">인증샷 목록</h2>
+                    <p id="postCount" class="mt-0.5 text-xs font-bold text-stone-400 sm:text-sm">게시글을 불러오는 중입니다.</p>
+                </div>
+                <span class="inline-flex w-fit rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700">월배당 기록실</span>
+            </div>
+
+            <div id="postList" class="space-y-4">
+                <div class="rounded-2xl border border-stone-200 bg-white p-8 text-center text-sm font-bold text-stone-400 shadow-sm">게시글을 불러오는 중입니다...</div>
+            </div>
+
+            <div id="emptyState" class="hidden rounded-2xl border border-dashed border-stone-300 bg-white p-8 text-center shadow-sm">
+                <p class="text-lg font-black text-stone-800">아직 첫 인증글이 없습니다.</p>
+                <p class="mt-2 text-sm leading-6 text-stone-500">첫 배당 기록을 남겨 게시판을 시작해 주세요.</p>
+            </div>
+        </section>
+    </main>
+
+    <button onclick="toggleModal(true)" class="fixed bottom-6 right-6 z-40 flex items-center gap-2 rounded-full border border-amber-400 bg-amber-500 px-5 py-4 text-sm font-black text-white shadow-lg transition-all hover:scale-105 hover:bg-amber-600 active:scale-95 sm:bottom-10 sm:right-10 sm:px-6 sm:text-base">
+        <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" /></svg>
+        <span class="hidden sm:inline">배당 인증샷 올리기</span>
+        <span class="sm:hidden">글쓰기</span>
+    </button>
+
+    <div id="postModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-stone-900/50 p-4 backdrop-blur-sm transition-opacity">
+        <div class="flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div class="flex items-center justify-between border-b border-stone-100 bg-stone-50 p-4">
+                <div>
+                    <h2 class="text-lg font-black text-stone-900">새 글 작성</h2>
+                    <p class="mt-0.5 text-xs text-stone-500">사진을 앨범에서 직접 선택해서 올릴 수 있어요!</p>
+                </div>
+                <button type="button" onclick="toggleModal(false)" class="p-2 text-2xl font-bold text-stone-400 hover:text-stone-800">&times;</button>
+            </div>
+            
+            <div class="custom-scrollbar overflow-y-auto p-5 sm:p-6">
+                <form id="postForm" class="space-y-4">
+                    <div>
+                        <label for="nickname" class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-stone-400">닉네임</label>
+                        <input id="nickname" name="nickname" type="text" maxlength="40" autocomplete="nickname" required class="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm font-bold text-stone-800 shadow-inner outline-none transition-all focus:border-amber-300 focus:bg-white focus:ring-2 focus:ring-amber-300" placeholder="배당요정">
+                    </div>
+
+                    <div>
+                        <label for="password" class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-stone-400">비밀번호</label>
+                        <input id="password" name="password" type="password" autocomplete="new-password" required class="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm font-bold text-stone-800 shadow-inner outline-none transition-all focus:border-amber-300 focus:bg-white focus:ring-2 focus:ring-amber-300" placeholder="게시글 삭제 할 때 필요해요">
+                    </div>
+
+                    <div>
+                        <label for="title" class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-stone-400">제목</label>
+                        <input id="title" name="title" type="text" maxlength="120" required class="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm font-bold text-stone-800 shadow-inner outline-none transition-all focus:border-amber-300 focus:bg-white focus:ring-2 focus:ring-amber-300" placeholder="이번 달 배당 인증">
+                    </div>
+
+                    <div class="rounded-xl border border-emerald-100 bg-emerald-50/50 p-3">
+                        <label for="fileInput" class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-emerald-600">사진 직접 올리기 📸</label>
+                        <div class="flex items-center gap-2">
+                            <input id="fileInput" type="file" accept="image/*" class="w-full cursor-pointer text-sm text-stone-500 file:mr-3 file:cursor-pointer file:rounded-lg file:border-0 file:bg-emerald-100 file:px-4 file:py-2 file:text-xs file:font-black file:text-emerald-700 hover:file:bg-emerald-200 focus:outline-none">
+                            <div id="uploadSpinner" class="hidden h-5 w-5 shrink-0 animate-spin rounded-full border-2 border-stone-200 border-t-emerald-500"></div>
+                        </div>
+                        <p class="mt-1.5 text-[11px] text-stone-500">앨범에서 사진을 고르면 아래 URL 칸이 자동으로 채워집니다.</p>
+                    </div>
+
+                    <div>
+                        <label for="imageUrl" class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-stone-400">이미지 URL (자동입력)</label>
+                        <input id="imageUrl" name="image_url" type="url" inputmode="url" class="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm font-bold text-stone-800 shadow-inner outline-none transition-all focus:border-amber-300 focus:bg-white focus:ring-2 focus:ring-amber-300" placeholder="위에서 사진을 고르면 채워집니다. 직접 입력도 가능!">
+                    </div>
+
+                    <div>
+                        <label for="content" class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-stone-400">내용</label>
+                        <textarea id="content" name="content" rows="4" required class="custom-scrollbar w-full resize-y rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm leading-6 text-stone-800 shadow-inner outline-none transition-all focus:border-amber-300 focus:bg-white focus:ring-2 focus:ring-amber-300" placeholder="종목, 금액, 느낀 점을 자유롭게 적어주세요."></textarea>
+                    </div>
+
+                    <p class="rounded-xl border border-rose-100 bg-rose-50 px-3 py-2 text-[0.75rem] leading-5 text-rose-600">실명, 계좌번호, 주문번호 등 민감한 정보는 캡처에서 가린 뒤 올려주세요.</p>
+
+                    <button id="submitButton" type="submit" class="w-full rounded-xl border border-amber-400 bg-amber-500 px-5 py-3 text-sm font-black text-white shadow-lg shadow-amber-200/70 transition-all hover:bg-amber-600 active:scale-[0.99] sm:text-base">게시글 등록</button>
+                </form>
+                <p id="formStatus" class="mt-4 hidden rounded-xl px-3 py-2 text-sm font-bold"></p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = "";
+        const postForm = document.getElementById('postForm');
+        const postList = document.getElementById('postList');
+        const emptyState = document.getElementById('emptyState');
+        const postCount = document.getElementById('postCount');
+        const formStatus = document.getElementById('formStatus');
+        const submitButton = document.getElementById('submitButton');
+        const refreshButton = document.getElementById('refreshButton');
+        const postModal = document.getElementById('postModal');
+        
+        const fileInput = document.getElementById('fileInput');
+        const imageUrlInput = document.getElementById('imageUrl');
+        const uploadSpinner = document.getElementById('uploadSpinner');
+        const PRIVACY_WARNING = '실명, 계좌번호, 주문번호 등 민감한 정보를 가리셨나요 ?';
+        let privacyWarningConfirmed = false;
+
+        const escapeMap = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+        function escapeHTML(value) { return String(value ?? '').replace(/[&<>"']/g, char => escapeMap[char]); }
+
+        // 🌟 모달 띄우기/숨기기 함수
+        function toggleModal(show) {
+            if (show) {
+                postModal.classList.remove('hidden');
+                postModal.classList.add('flex');
+            } else {
+                postModal.classList.add('hidden');
+                postModal.classList.remove('flex');
+                formStatus.classList.add('hidden'); // 닫을 때 상태 메시지도 숨김
+            }
+        }
+
+        function setFormStatus(message, tone = 'stone') {
+            const tones = {
+                stone: 'border border-stone-200 bg-stone-50 text-stone-600',
+                amber: 'border border-amber-200 bg-amber-50 text-amber-700',
+                emerald: 'border border-emerald-200 bg-emerald-50 text-emerald-700',
+                rose: 'border border-rose-200 bg-rose-50 text-rose-600'
+            };
+            formStatus.className = `mt-4 rounded-xl px-3 py-2 text-sm font-bold block ${tones[tone] || tones.stone}`;
+            formStatus.textContent = message;
+        }
+
+        async function fetchJson(url, options = {}) {
+            const response = await fetch(url, options);
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) { throw new Error(data.error || '요청 처리 중 오류가 발생했습니다.'); }
+            return data;
+        }
+
+        function renderImage(imageUrl) {
+            if (!imageUrl) return '';
+            const safeUrl = escapeHTML(imageUrl);
+            return `
+                <div data-image-wrap class="mt-4 overflow-hidden rounded-xl border border-stone-200 bg-stone-100">
+                    <img src="${safeUrl}" alt="배당 인증 이미지" loading="lazy" class="max-h-[28rem] w-full object-contain" onerror="this.parentElement.classList.add('hidden')">
+                </div>
+            `;
+        }
+
+        function renderPosts(posts) {
+            postList.innerHTML = '';
+            emptyState.classList.toggle('hidden', posts.length !== 0);
+            postCount.textContent = posts.length ? `총 ${posts.length.toLocaleString('ko-KR')}개의 인증글` : '첫 게시글을 기다리고 있습니다.';
+
+            posts.forEach(post => {
+                postList.innerHTML += `
+                    <article class="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm transition-all hover:border-amber-300 hover:shadow-md sm:p-6">
+                        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                            <div class="min-w-0">
+                                <div class="flex flex-wrap items-center gap-2">
+                                    <span class="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-black text-amber-700">${escapeHTML(post.nickname)}</span>
+                                    <time class="text-xs font-bold text-stone-400">${escapeHTML(post.created_at || '')}</time>
+                                </div>
+                                <h3 class="mt-3 break-anywhere text-lg font-black leading-7 text-stone-900 sm:text-xl">${escapeHTML(post.title)}</h3>
+                            </div>
+                            <div class="flex shrink-0 flex-wrap items-center gap-2">
+                                <button type="button" data-like-id="${post.id}" class="inline-flex w-fit items-center justify-center rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-black text-rose-600 transition-all hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60 sm:text-sm">
+                                    좋아요 <span class="ml-1">${Number(post.likes || 0).toLocaleString('ko-KR')}</span>
+                                </button>
+                                <button type="button" data-delete-id="${post.id}" class="inline-flex w-fit items-center justify-center rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-black text-stone-500 transition-all hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-60 sm:text-sm">
+                                    삭제
+                                </button>
+                            </div>
+                        </div>
+                        ${renderImage(post.image_url)}
+                        <p class="post-content mt-4 text-sm leading-6 text-stone-600 sm:text-base sm:leading-7">${escapeHTML(post.content)}</p>
+                    </article>
+                `;
+            });
+        }
+
+        async function loadPosts() {
+            postList.innerHTML = '<div class="rounded-2xl border border-stone-200 bg-white p-8 text-center text-sm font-bold text-amber-500 shadow-sm">게시글을 불러오는 중입니다...</div>';
+            emptyState.classList.add('hidden');
+
+            try {
+                const posts = await fetchJson(`${API_BASE}/api/posts?t=${Date.now()}`);
+                renderPosts(Array.isArray(posts) ? posts : []);
+            } catch (error) {
+                postCount.textContent = '게시글을 불러오지 못했습니다.';
+                postList.innerHTML = `<div class="rounded-2xl border border-rose-200 bg-rose-50 p-6 text-sm font-bold leading-6 text-rose-600">${escapeHTML(error.message)}</div>`;
+            }
+        }
+
+        fileInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            if (!window.confirm(PRIVACY_WARNING)) {
+                fileInput.value = '';
+                privacyWarningConfirmed = false;
+                setFormStatus('민감한 정보를 가린 뒤 다시 사진을 선택해 주세요.', 'amber');
+                return;
+            }
+
+            privacyWarningConfirmed = true;
+            uploadSpinner.classList.remove('hidden');
+            setFormStatus('사진을 안전하게 업로드하고 있어. 잠시만 기다려!', 'amber');
+
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('upload_preset', 'dividend_preset'); 
+            formData.append('cloud_name', 'ri9chw8b');
+
+            try {
+                const res = await fetch('https://api.cloudinary.com/v1_1/ri9chw8b/image/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await res.json();
+
+                if (data.secure_url) {
+                    imageUrlInput.value = data.secure_url;
+                    privacyWarningConfirmed = true;
+                    setFormStatus('사진 업로드 성공! 📸', 'emerald');
+                } else {
+                    throw new Error('업로드 실패');
+                }
+            } catch (error) {
+                setFormStatus('앗, 사진 업로드 중 오류가 발생!!!!', 'rose');
+                console.error(error);
+            } finally {
+                uploadSpinner.classList.add('hidden');
+                fileInput.value = ''; 
+            }
+        });
+
+        imageUrlInput.addEventListener('input', () => {
+            privacyWarningConfirmed = false;
+        });
+
+        postForm.addEventListener('submit', async event => {
+            event.preventDefault();
+
+            const formData = new FormData(postForm);
+            const payload = {
+                nickname: formData.get('nickname').trim(),
+                password: formData.get('password').trim(),
+                title: formData.get('title').trim(),
+                content: formData.get('content').trim(),
+                image_url: formData.get('image_url').trim()
+            };
+
+            if (!payload.nickname || !payload.password || !payload.title || !payload.content) {
+                setFormStatus('닉네임, 비밀번호, 제목, 내용을 모두 입력해 주세요.', 'rose');
+                return;
+            }
+
+            if (payload.image_url && !/^https?:\/\//i.test(payload.image_url)) {
+                setFormStatus('이미지 URL은 http:// 또는 https://로 시작해야 합니다.', 'rose');
+                return;
+            }
+
+            if (payload.image_url && !privacyWarningConfirmed) {
+                if (!window.confirm(PRIVACY_WARNING)) {
+                    setFormStatus('민감한 정보를 가린 뒤 다시 등록해 주세요.', 'amber');
+                    return;
+                }
+                privacyWarningConfirmed = true;
+            }
+
+            submitButton.disabled = true;
+            submitButton.textContent = '등록 중...';
+            setFormStatus('게시글을 등록하고 있습니다.', 'amber');
+
+            try {
+                await fetchJson(`${API_BASE}/api/posts`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                postForm.reset();
+                privacyWarningConfirmed = false;
+                toggleModal(false); // 🌟 글 작성이 완료되면 모달을 닫아줍니다!
+                await loadPosts();
+            } catch (error) {
+                setFormStatus(error.message, 'rose');
+            } finally {
+                submitButton.disabled = false;
+                submitButton.textContent = '게시글 등록';
+            }
+        });
+
+        postList.addEventListener('click', async event => {
+            const deleteButton = event.target.closest('[data-delete-id]');
+            if (deleteButton) {
+                const password = window.prompt('게시글 작성 시 입력한 비밀번호를 입력해 주세요.');
+                if (password === null) return;
+
+                if (!password.trim()) {
+                    alert('삭제 비밀번호를 입력해 주세요.');
+                    return;
+                }
+
+                if (!window.confirm('정말 삭제할까요? 삭제 후에는 되돌릴 수 없습니다.')) return;
+
+                deleteButton.disabled = true;
+                const originalDeleteText = deleteButton.textContent;
+                deleteButton.textContent = '삭제 중...';
+
+                try {
+                    await fetchJson(`${API_BASE}/api/posts/${deleteButton.dataset.deleteId}`, {
+                        method: 'DELETE',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ password: password.trim() })
+                    });
+                    alert('게시글이 삭제되었습니다.');
+                    await loadPosts();
+                } catch (error) {
+                    alert(error.message);
+                    deleteButton.disabled = false;
+                    deleteButton.textContent = originalDeleteText;
+                }
+                return;
+            }
+
+            const likeButton = event.target.closest('[data-like-id]');
+            if (!likeButton) return;
+
+            likeButton.disabled = true;
+            const originalText = likeButton.textContent;
+            likeButton.textContent = '반영 중...';
+
+            try {
+                await fetchJson(`${API_BASE}/api/posts/${likeButton.dataset.likeId}/like`, {
+                    method: 'POST'
+                });
+                await loadPosts();
+            } catch (error) {
+                alert(error.message);
+                likeButton.disabled = false;
+                likeButton.textContent = originalText;
+            }
+        });
+
+        refreshButton.addEventListener('click', loadPosts);
+        window.addEventListener('load', loadPosts);
+    </script>
+</body>
+</html>
