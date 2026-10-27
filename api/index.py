@@ -18,22 +18,67 @@ app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
 # =========================================================================
-# 🗄️ DB 접속 설정 (Vercel 환경변수 지원 및 Aiven Cloud SSL 대응)
+# 🗄️ DB 접속 설정 (로컬 .env.local 및 Vercel 환경변수 지원)
 # =========================================================================
-db_config = {
-    'host': os.environ.get('DB_HOST', 'dividendcheck-dividendcheck.j.aivencloud.com'),
-    'user': os.environ.get('DB_USER', 'avnadmin'),
-    'password': os.environ.get('DB_PASSWORD', ''),
-    'database': os.environ.get('DB_NAME', 'defaultdb'),
-    'port': int(os.environ.get('DB_PORT', 16264)),
-    'charset': 'utf8mb4',
-    'cursorclass': pymysql.cursors.DictCursor,
-    'connect_timeout': 5,
-    'ssl': {'ca': None}  # Aiven SSL 필수 요구사항 충족
-}
+# 로컬 개발 환경용: .env.local 또는 .env 파일이 존재하면 환경변수 자동 로드
+def _load_local_env():
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    root_dir = os.path.dirname(current_dir)
+    for env_name in ['.env.local', '.env']:
+        env_file = os.path.join(root_dir, env_name)
+        if os.path.isfile(env_file):
+            try:
+                with open(env_file, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('#') and '=' in line:
+                            k, v = line.split('=', 1)
+                            k, v = k.strip(), v.strip()
+                            if k not in os.environ:
+                                os.environ[k] = v
+                break
+            except Exception:
+                pass
+
+_load_local_env()
+
+_table_initialized = False
 
 def get_db_connection():
-    return pymysql.connect(**db_config)
+    global _table_initialized
+    conn = pymysql.connect(
+        host=os.environ.get('DB_HOST', 'dividendcheck-dividendcheck.j.aivencloud.com'),
+        user=os.environ.get('DB_USER', 'avnadmin'),
+        password=os.environ.get('DB_PASSWORD', ''),
+        database=os.environ.get('DB_NAME', 'defaultdb'),
+        port=int(os.environ.get('DB_PORT', 16264)),
+        charset='utf8mb4',
+        cursorclass=pymysql.cursors.DictCursor,
+        connect_timeout=5,
+        ssl={'ca': None}  # Aiven SSL 필수 요구사항 충족
+    )
+
+    if not _table_initialized:
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS board (
+                        id INT AUTO_INCREMENT PRIMARY KEY,
+                        nickname VARCHAR(40) NOT NULL,
+                        password VARCHAR(255) NOT NULL,
+                        title VARCHAR(120) NOT NULL,
+                        content TEXT NOT NULL,
+                        image_url VARCHAR(255),
+                        likes INT DEFAULT 0,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                conn.commit()
+            _table_initialized = True
+        except Exception:
+            pass
+
+    return conn
 
 def is_post_password_match(stored_password, input_password):
     if not stored_password or not input_password:
