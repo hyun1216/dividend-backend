@@ -1,5 +1,6 @@
 // src/app/layout.tsx
 import type { Metadata, Viewport } from 'next';
+import { Analytics } from '@vercel/analytics/react';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -43,6 +44,7 @@ export default function RootLayout({
       </head>
       <body className="min-h-screen flex items-center justify-center p-4 sm:p-8 antialiased">
         {children}
+        <Analytics />
       </body>
     </html>
   );
