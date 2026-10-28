@@ -28,4 +28,12 @@ node_modules/
 out/
 DB/
 *.bak
+*.tsbuildinfo
 
+# Local legacy backups
+backup/
+templates/
+board/
+index.html
+IDE_제작/
+제미나이_제작/

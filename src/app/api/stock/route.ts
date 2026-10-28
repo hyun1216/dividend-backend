@@ -1,5 +1,6 @@
 // src/app/api/stock/route.ts
 import { NextRequest, NextResponse } from 'next/server';
+import { DEFAULT_DIVIDEND_STOCKS, BUILTIN_KR_STOCKS } from '@/constants/stockData';
 
 export const runtime = 'nodejs';
 
@@ -75,21 +76,28 @@ export async function GET(request: NextRequest) {
             : profile.longBusinessSummary;
         }
       }
-    } catch {
-      // 배당 정보 조회 실패 시 기본 0% 유지
-    }
+    // 프리셋 종목 정보가 있는 경우 Fallback (한국 ETF 배당 데이터 보완)
+    const preset = DEFAULT_DIVIDEND_STOCKS.find(
+      (s) => s.ticker.toUpperCase() === symbol || s.ticker.replace('.KS', '') === symbol
+    );
+    const builtin = BUILTIN_KR_STOCKS.find(
+      (s) => s.ticker.toUpperCase() === symbol || s.code === symbol
+    );
 
-    const period = rate > 7.0 ? '월배당' : '분기배당';
-    const months = rate > 7.0 ? '매달' : '3, 6, 9, 12월';
+    const finalRate = rate > 0 ? rate : (preset?.rate || 0);
+    const finalName = preset?.name || (builtin ? `${builtin.name} (${symbol})` : `${shortName} (${symbol})`);
+    const finalDesc = preset?.desc || desc;
+    const finalPeriod = preset?.period || (finalRate > 7.0 ? '월배당' : '분기배당');
+    const finalMonths = preset?.months || (finalRate > 7.0 ? '매달' : '3, 6, 9, 12월');
 
     return NextResponse.json({
       ticker: symbol,
       price,
-      rate,
-      name: `${shortName} (${symbol})`,
-      desc,
-      period,
-      months,
+      rate: finalRate,
+      name: finalName,
+      desc: finalDesc,
+      period: finalPeriod,
+      months: finalMonths,
       isUS: !symbol.endsWith('.KS') && !symbol.endsWith('.KQ'),
     });
   } catch (error) {

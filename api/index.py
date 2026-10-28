@@ -18,67 +18,22 @@ app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
 # =========================================================================
-# 🗄️ DB 접속 설정 (로컬 .env.local 및 Vercel 환경변수 지원)
+# 🗄️ DB 접속 설정 (Vercel 환경변수 지원 및 Aiven Cloud SSL 대응)
 # =========================================================================
-# 로컬 개발 환경용: .env.local 또는 .env 파일이 존재하면 환경변수 자동 로드
-def _load_local_env():
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    root_dir = os.path.dirname(current_dir)
-    for env_name in ['.env.local', '.env']:
-        env_file = os.path.join(root_dir, env_name)
-        if os.path.isfile(env_file):
-            try:
-                with open(env_file, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        line = line.strip()
-                        if line and not line.startswith('#') and '=' in line:
-                            k, v = line.split('=', 1)
-                            k, v = k.strip(), v.strip()
-                            if k not in os.environ:
-                                os.environ[k] = v
-                break
-            except Exception:
-                pass
-
-_load_local_env()
-
-_table_initialized = False
+db_config = {
+    'host': os.environ.get('DB_HOST', 'dividendcheck-dividendcheck.j.aivencloud.com'),
+    'user': os.environ.get('DB_USER', 'avnadmin'),
+    'password': os.environ.get('DB_PASSWORD', ''),
+    'database': os.environ.get('DB_NAME', 'defaultdb'),
+    'port': int(os.environ.get('DB_PORT', 16264)),
+    'charset': 'utf8mb4',
+    'cursorclass': pymysql.cursors.DictCursor,
+    'connect_timeout': 5,
+    'ssl': {'ca': None}  # Aiven SSL 필수 요구사항 충족
+}
 
 def get_db_connection():
-    global _table_initialized
-    conn = pymysql.connect(
-        host=os.environ.get('DB_HOST', 'dividendcheck-dividendcheck.j.aivencloud.com'),
-        user=os.environ.get('DB_USER', 'avnadmin'),
-        password=os.environ.get('DB_PASSWORD', ''),
-        database=os.environ.get('DB_NAME', 'defaultdb'),
-        port=int(os.environ.get('DB_PORT', 16264)),
-        charset='utf8mb4',
-        cursorclass=pymysql.cursors.DictCursor,
-        connect_timeout=5,
-        ssl={'ca': None}  # Aiven SSL 필수 요구사항 충족
-    )
-
-    if not _table_initialized:
-        try:
-            with conn.cursor() as cursor:
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS board (
-                        id INT AUTO_INCREMENT PRIMARY KEY,
-                        nickname VARCHAR(40) NOT NULL,
-                        password VARCHAR(255) NOT NULL,
-                        title VARCHAR(120) NOT NULL,
-                        content TEXT NOT NULL,
-                        image_url VARCHAR(255),
-                        likes INT DEFAULT 0,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                """)
-                conn.commit()
-            _table_initialized = True
-        except Exception:
-            pass
-
-    return conn
+    return pymysql.connect(**db_config)
 
 def is_post_password_match(stored_password, input_password):
     if not stored_password or not input_password:
@@ -100,7 +55,7 @@ DIVIDEND_STOCKS = [
     { "category": "us-stock", "ticker": "ABBV", "isUS": True, "period": "분기배당", "months": "2, 5, 8, 11월", "name": "에브비 (ABBV)", "rate": 3.15, "desc": "50년 넘게 배당을 늘려온 미국 대표 제약·바이오 대표 배당귀족주" },
     { "category": "kr-etf", "ticker": "088980.KS", "isUS": False, "period": "반기배당", "months": "6, 12월", "name": "맥쿼리인프라 (088980)", "rate": 6.89, "desc": "우리나라 도로·교량 통행료로 배당 주는 국내 근본 고배당주" },
     { "category": "kr-etf", "ticker": "446720.KS", "isUS": False, "period": "월배당", "months": "매달", "name": "SOL 미국배당다우존스", "rate": 2.79, "desc": "미국 SCHD를 한국 주식시장에서 만 원대로 매달 적립할 수 있는 한국형 월배당 ETF" },
-    { "category": "kr-etf", "ticker": "476080.KS", "isUS": False, "period": "월배당", "months": "매달", "name": "TIME Korea플러스배당액티브", "rate": 5.11, "desc": "고배당 중간배당 실시하는 월배당 ETF" },
+    { "category": "kr-etf", "ticker": "441800.KS", "isUS": False, "period": "월배당", "months": "매달", "name": "TIME Korea플러스배당액티브", "rate": 5.11, "desc": "고배당 중간배당 실시하는 월배당 ETF" },
     { "category": "kr-etf", "ticker": "161510.KS", "isUS": False, "period": "월배당", "months": "매달", "name": "PLUS고배당주", "rate": 3.73, "desc": "유동시총 상위200중 예상 배당수익률 30위 이내 종목에 투자하는 ETF" },
     { "category": "kr-etf", "ticker": "447770.KS", "isUS": False, "period": "월배당", "months": "매달", "name": "KODEX 미국배당커버드콜액티브", "rate": 8.7, "desc": "미국 우량 배당성장주에 투자하고 옵션을 매도하여 월배당을 지급하는 ETF" },
     { "category": "kr-etf", "ticker": "479620.KS", "isUS": False, "period": "월배당", "months": "매달", "name": "KODEX 200타겟위클리커버드콜", "rate": 11.32, "desc": "코스피200에 위클리 커버드콜 전략으로 투자하는 ETF" },
@@ -175,7 +130,7 @@ BUILTIN_KR_STOCKS = [
     {"code": "360200", "ticker": "360200.KS", "name": "TIGER 미국배당+3%프리미엄다우존스"},
     {"code": "458760", "ticker": "458760.KS", "name": "TIGER 미국배당+7%프리미엄다우존스"},
     {"code": "447770", "ticker": "447770.KS", "name": "KODEX 미국배당커버드콜액티브"},
-    {"code": "476080", "ticker": "476080.KS", "name": "TIME Korea플러스배당액티브"},
+    {"code": "441800", "ticker": "441800.KS", "name": "TIME Korea플러스배당액티브"},
     {"code": "161510", "ticker": "161510.KS", "name": "PLUS 고배당주"},
     {"code": "479620", "ticker": "479620.KS", "name": "KODEX 200타겟위클리커버드콜"},
     {"code": "474220", "ticker": "474220.KS", "name": "SOL 코리아고배당"},
@@ -247,19 +202,24 @@ def get_single_stock():
         if rate_percent > 50.0:
             rate_percent = 0.0
 
-        short_name = info.get('shortName', symbol)
-        summary = info.get('longBusinessSummary', '실시간으로 추가된 검색 종목입니다.')
-        if summary and len(summary) > 50:
-            summary = summary[:50] + "..."
+        # 한국 ETF 배당 데이터 보완을 위한 내장 프리셋 Fallback
+        preset = next((s for s in DIVIDEND_STOCKS if s["ticker"].upper() == symbol or s["ticker"].replace(".KS", "") == symbol), None)
+        builtin = next((b for b in BUILTIN_KR_STOCKS if b["ticker"].upper() == symbol or b["code"] == symbol), None)
+
+        final_rate = rate_percent if rate_percent > 0 else (preset["rate"] if preset else 0.0)
+        final_name = preset["name"] if preset else (f"{builtin['name']} ({symbol})" if builtin else f"{short_name} ({symbol})")
+        final_desc = preset["desc"] if preset else summary
+        final_period = preset["period"] if preset else ("월배당" if final_rate > 7.0 else "분기배당")
+        final_months = preset["months"] if preset else ("매달" if final_rate > 7.0 else "3, 6, 9, 12월")
 
         stock_data = {
             "ticker": symbol,
             "price": price,
-            "rate": rate_percent,
-            "name": f"{short_name} ({symbol})",
-            "desc": summary,
-            "period": "월배당" if rate_percent > 7.0 else "분기배당",
-            "months": "매달" if rate_percent > 7.0 else "3, 6, 9, 12월"
+            "rate": final_rate,
+            "name": final_name,
+            "desc": final_desc,
+            "period": final_period,
+            "months": final_months
         }
         cache[symbol] = (current_time, stock_data)
         return jsonify(stock_data)
