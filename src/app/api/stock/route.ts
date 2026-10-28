@@ -76,6 +76,10 @@ export async function GET(request: NextRequest) {
             : profile.longBusinessSummary;
         }
       }
+    } catch {
+      // 배당 정보 조회 실패 시 기본 0% 유지
+    }
+
     // 프리셋 종목 정보가 있는 경우 Fallback (한국 ETF 배당 데이터 보완)
     const preset = DEFAULT_DIVIDEND_STOCKS.find(
       (s) => s.ticker.toUpperCase() === symbol || s.ticker.replace('.KS', '') === symbol
