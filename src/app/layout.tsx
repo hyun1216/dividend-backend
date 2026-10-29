@@ -9,6 +9,9 @@ export const metadata: Metadata = {
   description: '원하는 월평균 배당금을 받기 위해 필요한 종목별 진짜 투자 원금을 실시간 주가와 배당률로 역산해 드립니다.',
   verification: {
     google: 'ApxSdhPPPzhnVYIeqsM9VVLi2qIgT2Xk-mjI0Lm_pIE',
+    other: {
+      'naver-site-verification': 'dd40d7a1f027ec36bee4db0b2f1a691622f82c18',
+    },
   },
   openGraph: {
     title: '월 배당금 목표 원금 계산기 | MyDividend',
@@ -50,6 +53,7 @@ export default function RootLayout({
   return (
     <html lang="ko">
       <head>
+        <meta name="naver-site-verification" content="dd40d7a1f027ec36bee4db0b2f1a691622f82c18" />
         {/* 구글 애드센스 스크립트 */}
         <script
           async
