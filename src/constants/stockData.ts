@@ -11,7 +11,7 @@ export const DEFAULT_DIVIDEND_STOCKS: StockItem[] = [
   { category: 'kr-etf', ticker: '441800.KS', isUS: false, period: '월배당', months: '매달', name: 'TIME Korea플러스배당액티브', rate: 5.11, desc: '고배당 중간배당 실시하는 월배당 ETF', price: 0 },
   { category: 'kr-etf', ticker: '161510.KS', isUS: false, period: '월배당', months: '매달', name: 'PLUS고배당주', rate: 3.73, desc: '유동시총 상위200중 예상 배당수익률 30위 이내 종목에 투자하는 ETF', price: 0 },
   { category: 'kr-etf', ticker: '447770.KS', isUS: false, period: '월배당', months: '매달', name: 'KODEX 미국배당커버드콜액티브', rate: 8.7, desc: '미국 우량 배당성장주에 투자하고 옵션을 매도하여 월배당을 지급하는 ETF', price: 0 },
-  { category: 'kr-etf', ticker: '479620.KS', isUS: false, period: '월배당', months: '매달', name: 'KODEX 200타겟위클리커버드콜', rate: 11.32, desc: '코스피200에 위클리 커버드콜 전략으로 투자하는 ETF', price: 0 },
+  { category: 'kr-etf', ticker: '498400.KS', isUS: false, period: '월배당', months: '매달', name: 'KODEX 200타겟위클리커버드콜', rate: 11.32, desc: '코스피200에 위클리 커버드콜 전략으로 투자하는 ETF', price: 0 },
   { category: 'kr-etf', ticker: '474220.KS', isUS: false, period: '지정월배당', months: '11, 12, 1, 2, 3, 4, 5월', name: 'SOL 코리아고배당', rate: 3.44, desc: '국내 고배당주 중심으로 안정성과 배당 수익을 동시에 추구하는 ETF', price: 0 },
   { category: 'us-etf', ticker: 'SCHD', isUS: true, period: '분기배당', months: '3, 6, 9, 12월', name: 'SCHD (Schwab US Dividend Equity ETF)', rate: 3.3, desc: '안정적인 배당 성장의 교과서, 미국 우량 배당주 모음', price: 0 },
   { category: 'us-etf', ticker: 'JEPI', isUS: true, period: '월배당', months: '매달', name: 'JEPI (JP모건 초고배당 ETF)', rate: 8.43, desc: '주가 상승보단 압도적인 월 배당 현금 흐름에 집중하는 ETF', price: 0 },
@@ -92,7 +92,7 @@ export const BUILTIN_KR_STOCKS = [
   { code: '447770', ticker: '447770.KS', name: 'KODEX 미국배당커버드콜액티브' },
   { code: '441800', ticker: '441800.KS', name: 'TIME Korea플러스배당액티브' },
   { code: '161510', ticker: '161510.KS', name: 'PLUS 고배당주' },
-  { code: '479620', ticker: '479620.KS', name: 'KODEX 200타겟위클리커버드콜' },
+  { code: '498400', ticker: '498400.KS', name: 'KODEX 200타겟위클리커버드콜' },
   { code: '474220', ticker: '474220.KS', name: 'SOL 코리아고배당' },
   { code: '379800', ticker: '379800.KS', name: 'KODEX 미국S&P500TR' },
   { code: '379810', ticker: '379810.KS', name: 'KODEX 미국나스닥100TR' }

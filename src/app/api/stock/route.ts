@@ -19,7 +19,7 @@ export async function GET(request: NextRequest) {
 
   try {
     // 1. 실시간 주가 조회 (Yahoo Finance v8 Chart API)
-    const chartUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1d`;
+    const chartUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1y&events=dividends`;
     const chartRes = await fetch(chartUrl, {
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
       next: { revalidate: 300 },
@@ -30,9 +30,15 @@ export async function GET(request: NextRequest) {
     }
 
     const chartJson = await chartRes.json();
-    const meta = chartJson?.chart?.result?.[0]?.meta;
+    const chartResult = chartJson?.chart?.result?.[0];
+    const meta = chartResult?.meta;
     const price = meta?.regularMarketPrice || 0;
     const shortName = meta?.shortName || symbol;
+    const dividends = Object.values(chartResult?.events?.dividends || {}) as Array<{ amount?: number }>;
+    const trailingDividendAmount = dividends.reduce(
+      (total, dividend) => total + (typeof dividend.amount === 'number' ? dividend.amount : 0),
+      0
+    );
 
     if (price <= 0) {
       return NextResponse.json({ error: `종목 [${symbol}]의 현재가를 불러올 수 없습니다.` }, { status: 404 });
@@ -68,8 +74,6 @@ export async function GET(request: NextRequest) {
           rate = Number(((dividendRate / price) * 100).toFixed(2));
         }
 
-        if (rate > 50.0) rate = 0.0; // 비정상 이상치 필터링
-
         if (profile?.longBusinessSummary) {
           desc = profile.longBusinessSummary.length > 50
             ? profile.longBusinessSummary.slice(0, 50) + '...'
@@ -79,6 +83,12 @@ export async function GET(request: NextRequest) {
     } catch {
       // 배당 정보 조회 실패 시 기본 0% 유지
     }
+
+    // Chart API의 과거 1년 배당 내역으로 보완
+    if ((rate <= 0 || rate > 50.0) && trailingDividendAmount > 0) {
+      rate = Number(((trailingDividendAmount / price) * 100).toFixed(2));
+    }
+    if (rate > 50.0) rate = 0.0; // 비정상 이상치 필터링
 
     // 프리셋 종목 정보가 있는 경우 Fallback (한국 ETF 배당 데이터 보완)
     const preset = DEFAULT_DIVIDEND_STOCKS.find(
@@ -91,8 +101,13 @@ export async function GET(request: NextRequest) {
     const finalRate = rate > 0 ? rate : (preset?.rate || 0);
     const finalName = preset?.name || (builtin ? `${builtin.name} (${symbol})` : `${shortName} (${symbol})`);
     const finalDesc = preset?.desc || desc;
-    const finalPeriod = preset?.period || (finalRate > 7.0 ? '월배당' : '분기배당');
-    const finalMonths = preset?.months || (finalRate > 7.0 ? '매달' : '3, 6, 9, 12월');
+
+    const isMonthlyDividend = dividends.length >= 10 || (dividends.length === 0 && finalRate > 7.0);
+    const calculatedPeriod = isMonthlyDividend ? '월배당' : '분기배당';
+    const calculatedMonths = isMonthlyDividend ? '매달' : '3, 6, 9, 12월';
+
+    const finalPeriod = preset?.period || calculatedPeriod;
+    const finalMonths = preset?.months || calculatedMonths;
 
     return NextResponse.json({
       ticker: symbol,
